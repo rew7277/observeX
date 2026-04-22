@@ -151,7 +151,7 @@ export function LiveLogsClient({ records }: { records: LogRecord[] }) {
             const isSelected = selected === row;
             return (
               <div
-                key={`${row.traceId}-${i}`}
+                key={`${row.traceId || "—"}-${i}`}
                 onClick={() => setSelected(isSelected ? null : row)}
                 className={`grid cursor-pointer grid-cols-[140px_80px_140px_110px_130px_1fr] gap-2 border-b border-white/5 px-4 py-3 text-xs transition last:border-0 ${
                   isSelected ? "bg-cyan-400/10 ring-inset ring-1 ring-cyan-400/30" : "hover:bg-white/[0.05]"
@@ -165,7 +165,7 @@ export function LiveLogsClient({ records }: { records: LogRecord[] }) {
                 </div>
                 <div className="truncate text-slate-300">{row.application}</div>
                 <div className="truncate text-slate-400">{row.environment}</div>
-                <div className="truncate font-mono text-violet-300 text-[10px]">{row.traceId}</div>
+                <div className="truncate font-mono text-violet-300 text-[10px]">{row.traceId || "—"}</div>
                 <div className="truncate text-slate-200">{row.message}</div>
               </div>
             );
@@ -221,7 +221,7 @@ export function LiveLogsClient({ records }: { records: LogRecord[] }) {
                 { icon: Clock,        label: "Timestamp",   value: String(selected.timestamp) },
                 { icon: Layers,       label: "Application", value: selected.application },
                 { icon: Tag,          label: "Environment", value: selected.environment },
-                { icon: Hash,         label: "Trace ID",    value: selected.traceId },
+                { icon: Hash,         label: "Trace ID",    value: selected.traceId || "—" },
                 { icon: Activity,     label: "Latency",     value: `${selected.latencyMs} ms` },
               ].map(({ icon: Icon, label, value }) => (
                 <div key={label} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
@@ -243,6 +243,18 @@ export function LiveLogsClient({ records }: { records: LogRecord[] }) {
                   {selected.message}
                 </div>
               </div>
+
+              {selected.payloadJson ? (
+                <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
+                    <Layers className="h-3 w-3" />
+                    Structured payload
+                  </div>
+                  <pre className="mt-1.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-black/20 p-3 text-[11px] leading-5 text-slate-300">
+{JSON.stringify(selected.payloadJson, null, 2)}
+                  </pre>
+                </div>
+              ) : null}
             </div>
 
             {/* Nav between records */}

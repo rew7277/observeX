@@ -12,7 +12,9 @@ export function UploadDropzone({ workspaceId }: { workspaceId: string }) {
   const [pending, startTransition] = useTransition();
 
   async function handleFile(file: File) {
+    setStatus(`Reading ${file.name}...`);
     const text = await file.text();
+    setStatus(`Uploading ${file.name} and indexing records...`);
     const form = new FormData();
     form.set("workspaceId", workspaceId);
     form.set("fileName", file.name);

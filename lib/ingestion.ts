@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { buildMetrics, parseLogs, type LogRecord } from "@/lib/log-parser";
 import { buildSignature, detectSensitiveData, hashValue, maskSensitiveText } from "@/lib/security";
 
-const INSERT_BATCH_SIZE = 500;
+const INSERT_BATCH_SIZE = 2000;
 
 function toDate(value: string) {
   const date = new Date(value);

@@ -112,7 +112,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ works
 
         <Panel className="p-5 md:p-6">
           <div className="flex items-center gap-2 mb-1"><Activity className="h-4 w-4 text-violet-300" /><div className="text-lg font-semibold">Busiest traces</div></div>
-          <div className="text-sm text-slate-400 mb-5">Trace IDs with the most log entries</div>
+          <div className="text-sm text-slate-400 mb-5">Only real trace/request/correlation IDs from the uploaded logs</div>
           <div className="space-y-2">
             {metrics.busiestTraces.map((t, i) => (
               <div key={t.traceId} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm">
@@ -122,6 +122,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ works
                 <span className="text-xs text-slate-500 shrink-0">entries</span>
               </div>
             ))}
+            {!metrics.busiestTraces.length ? <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">No real trace IDs were detected in the current log data. Use Flow Analytics for application transitions and grouped errors instead.</div> : null}
           </div>
         </Panel>
       </section>

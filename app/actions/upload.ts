@@ -74,7 +74,7 @@ export async function uploadLogAction(formData: FormData) {
         droppedCount: 0,
         contentType: result.parsed.sourceType,
         rawText: `[${result.recordCount.toLocaleString()} records persisted to log_events]`,
-        parsedJson: result.parsed.records.slice(0, 1000) as any,
+        parsedJson: result.parsed.records.slice(0, 200).map((row) => ({ timestamp: row.timestamp, level: row.level, application: row.application, environment: row.environment, traceId: row.traceId, latencyMs: row.latencyMs, message: row.message })) as any,
         summaryJson: result.summary as any,
         fingerprint: result.fingerprint,
         completedAt: new Date()

@@ -15,25 +15,103 @@ type ParseOptions = {
   environmentHint?: string;
 };
 
-function fallbackTraceId() {
-  return `TRC-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
-}
-
 function normalizeTimestamp(value: unknown) {
   const date = new Date(String(value || ""));
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
+function cleanString(value: unknown, fallback = "") {
+  const text = String(value ?? fallback).trim();
+  return text || fallback;
+}
+
+function compactWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeTraceId(value: unknown) {
+  const text = cleanString(value);
+  if (!text) return "";
+  if (/^(null|undefined|na|n\/a|none|unknown)$/i.test(text)) return "";
+  return text;
+}
+
+function getNestedValue(payload: any, paths: string[]) {
+  for (const path of paths) {
+    const parts = path.split(".");
+    let current = payload;
+    let ok = true;
+    for (const part of parts) {
+      if (current && typeof current === "object" && part in current) {
+        current = current[part];
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (ok && current != null && current !== "") return current;
+  }
+  return undefined;
+}
+
+function stripStructuralFields(payload: Record<string, unknown>) {
+  const clone = { ...payload };
+  [
+    "timestamp", "time", "date", "severity", "level", "status",
+    "application", "app", "service", "logger", "flowName",
+    "environment", "env", "stage",
+    "traceId", "trace", "eventId", "requestId", "correlationId",
+    "latencyMs", "latency", "durationMs", "responseTime", "elapsedMs",
+    "message", "msg", "description", "error", "exception"
+  ].forEach((key) => delete clone[key]);
+  return clone;
+}
+
+function summarizePayload(payload: Record<string, unknown>) {
+  const directMessage = getNestedValue(payload, [
+    "message",
+    "msg",
+    "description",
+    "error",
+    "exception",
+    "entry.message",
+    "entry.error.message",
+    "entry.exception.message",
+  ]);
+  if (directMessage) return compactWhitespace(String(directMessage));
+
+  const flowName = getNestedValue(payload, ["flowName", "FlowName", "entry.flowName", "entry.FlowName"]);
+  const requestUri = getNestedValue(payload, ["requestUri", "requestURI", "RequestUri", "entry.requestUri"]);
+  const method = getNestedValue(payload, ["method", "httpMethod", "entry.method"]);
+  const status = getNestedValue(payload, ["statusCode", "status", "httpStatus", "entry.statusCode"]);
+  const parts = [
+    flowName ? `flow=${flowName}` : "",
+    method ? `method=${method}` : "",
+    requestUri ? `uri=${requestUri}` : "",
+    status ? `status=${status}` : "",
+  ].filter(Boolean);
+
+  if (parts.length) return parts.join(" • ");
+
+  const leftover = stripStructuralFields(payload);
+  const preview = Object.entries(leftover)
+    .slice(0, 4)
+    .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
+    .join(" • ");
+
+  return preview || "Structured log event";
+}
+
 function normalizeObject(record: any, options?: ParseOptions): LogRecord {
   const payload = typeof record === "object" && record ? record : {};
   return {
-    timestamp: normalizeTimestamp(payload.timestamp || payload.time || payload.date),
-    level: String(payload.level || payload.severity || payload.status || "INFO").toUpperCase(),
-    application: String(payload.application || payload.app || payload.service || payload.logger || payload.flowName || "unknown-app"),
-    environment: String(payload.environment || payload.env || payload.stage || options?.environmentHint || "unknown"),
-    traceId: String(payload.traceId || payload.trace || payload.eventId || payload.requestId || payload.correlationId || fallbackTraceId()),
-    latencyMs: Math.max(0, Number(payload.latencyMs || payload.latency || payload.durationMs || payload.responseTime || payload.elapsedMs || 0)),
-    message: String(payload.message || payload.msg || payload.description || payload.error || payload.exception || "No message"),
+    timestamp: normalizeTimestamp(getNestedValue(payload, ["timestamp", "time", "date", "Timestamp", "entry.timestamp"])),
+    level: cleanString(getNestedValue(payload, ["level", "severity", "status", "entry.level"]), "INFO").toUpperCase(),
+    application: cleanString(getNestedValue(payload, ["application", "app", "service", "logger", "flowName", "FlowName", "entry.flowName", "entry.application"]), "unknown-app"),
+    environment: cleanString(getNestedValue(payload, ["environment", "env", "stage", "entry.environment"]) || options?.environmentHint, "unknown"),
+    traceId: normalizeTraceId(getNestedValue(payload, ["traceId", "trace", "eventId", "requestId", "correlationId", "correlationID", "entry.traceId", "entry.requestId", "entry.correlationId"])),
+    latencyMs: Math.max(0, Number(getNestedValue(payload, ["latencyMs", "latency", "durationMs", "responseTime", "elapsedMs", "entry.latencyMs"]) || 0)),
+    message: summarizePayload(payload),
     payloadJson: payload
   };
 }
@@ -68,30 +146,69 @@ function parseJsonLines(content: string, options?: ParseOptions): LogRecord[] | 
   return rows;
 }
 
-function parsePlainText(content: string, options?: ParseOptions): LogRecord[] {
-  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const regex = /^(?<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?\s*(?:\[(?<level>[A-Z]+)\])?\s*(?:\[(?<application>[^\]]+)\])?\s*(?:\[(?<environment>[^\]]+)\])?\s*(?:trace(?:Id)?=(?<traceId>[^\s]+))?\s*(?:latency(?:Ms)?=(?<latencyMs>\d+))?\s*(?:message=)?(?<message>.*)$/i;
+function extractEmbeddedJsonObjects(content: string, options?: ParseOptions): LogRecord[] {
+  const lines = content.split(/\r?\n/);
+  const rows: LogRecord[] = [];
+  let buffer: string[] = [];
+  let depth = 0;
+  let started = false;
 
-  return lines.map((line, index) => {
-    const match = regex.exec(line);
-    const level = match?.groups?.level || (/error|exception|failed/i.test(line) ? "ERROR" : /warn/i.test(line) ? "WARN" : "INFO");
-    const application = match?.groups?.application || inferApplication(line);
-    const environment = match?.groups?.environment || inferEnvironment(line) || options?.environmentHint || "unknown";
-    return {
-      timestamp: normalizeTimestamp(match?.groups?.timestamp),
-      level: level.toUpperCase(),
-      application,
-      environment,
-      traceId: match?.groups?.traceId || inferTrace(line) || `TRC-${String(index + 1).padStart(5, "0")}`,
-      latencyMs: Number(match?.groups?.latencyMs || inferLatency(line) || 0),
-      message: (match?.groups?.message || line).trim(),
-      payloadJson: { raw: line }
-    };
-  });
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const opens = (line.match(/[\[{]/g) || []).length;
+    const closes = (line.match(/[\]}]/g) || []).length;
+
+    if (!started && (line.startsWith("{") || line.startsWith("["))) {
+      started = true;
+      buffer = [line];
+      depth = opens - closes;
+      if (depth <= 0) {
+        try {
+          const parsed = JSON.parse(buffer.join("\n"));
+          if (Array.isArray(parsed)) {
+            rows.push(...parsed.filter((item) => item && typeof item === "object").map((item) => normalizeObject(item, options)));
+          } else if (parsed && typeof parsed === "object") {
+            rows.push(normalizeObject(parsed, options));
+          }
+        } catch {}
+        buffer = [];
+        started = false;
+        depth = 0;
+      }
+      continue;
+    }
+
+    if (started) {
+      buffer.push(line);
+      depth += opens - closes;
+      if (depth <= 0) {
+        try {
+          const parsed = JSON.parse(buffer.join("\n"));
+          if (Array.isArray(parsed)) {
+            rows.push(...parsed.filter((item) => item && typeof item === "object").map((item) => normalizeObject(item, options)));
+          } else if (parsed && typeof parsed === "object") {
+            rows.push(normalizeObject(parsed, options));
+          }
+        } catch {}
+        buffer = [];
+        started = false;
+        depth = 0;
+      }
+    }
+  }
+
+  return rows;
 }
 
 function inferApplication(line: string) {
-  const patterns = [/app(?:lication)?[=:]\s*([A-Za-z0-9._-]+)/i, /service[=:]\s*([A-Za-z0-9._-]+)/i, /flow[=:]\s*([A-Za-z0-9._-]+)/i];
+  const patterns = [
+    /app(?:lication)?[=:]\s*([A-Za-z0-9._/-]+)/i,
+    /service[=:]\s*([A-Za-z0-9._/-]+)/i,
+    /flow(?:Name)?[=:]\s*([A-Za-z0-9._/-]+)/i,
+    /logger[=:]\s*([A-Za-z0-9._/-]+)/i,
+  ];
   for (const pattern of patterns) {
     const match = pattern.exec(line);
     if (match?.[1]) return match[1];
@@ -105,13 +222,39 @@ function inferEnvironment(line: string) {
 }
 
 function inferTrace(line: string) {
-  const match = /(?:traceId|trace|requestId|eventId|correlationId)[=:]\s*([A-Za-z0-9._-]+)/i.exec(line);
-  return match?.[1];
+  const match = /(?:traceId|trace|requestId|eventId|correlationId|correlationID)[=:]\s*([A-Za-z0-9._:-]+)/i.exec(line);
+  return match?.[1] || "";
 }
 
 function inferLatency(line: string) {
   const match = /(?:latency|responseTime|duration|elapsed(?:Ms)?)\s*[=:]\s*(\d+)/i.exec(line);
   return match?.[1];
+}
+
+function parsePlainText(content: string, options?: ParseOptions): LogRecord[] {
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const regex = /^(?<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z)?)?\s*(?:\[(?<level>[A-Z]+)\])?\s*(?:\[(?<application>[^\]]+)\])?\s*(?:\[(?<environment>[^\]]+)\])?\s*(?:trace(?:Id)?=(?<traceId>[^\s]+))?\s*(?:latency(?:Ms)?=(?<latencyMs>\d+))?\s*(?:message=)?(?<message>.*)$/i;
+
+  return lines.map((line) => {
+    const match = regex.exec(line);
+    const level = match?.groups?.level || (/error|exception|failed/i.test(line) ? "ERROR" : /warn/i.test(line) ? "WARN" : "INFO");
+    const application = match?.groups?.application || inferApplication(line);
+    const environment = match?.groups?.environment || inferEnvironment(line) || options?.environmentHint || "unknown";
+    const timestamp = normalizeTimestamp(match?.groups?.timestamp);
+    const traceId = normalizeTraceId(match?.groups?.traceId || inferTrace(line));
+    const message = compactWhitespace((match?.groups?.message || line).trim());
+
+    return {
+      timestamp,
+      level: level.toUpperCase(),
+      application,
+      environment,
+      traceId,
+      latencyMs: Number(match?.groups?.latencyMs || inferLatency(line) || 0),
+      message,
+      payloadJson: { raw: line }
+    };
+  });
 }
 
 function percentile(values: number[], pct: number) {
@@ -124,7 +267,7 @@ function percentile(values: number[], pct: number) {
 export function parseLogs(content: string, options?: ParseOptions): {
   sourceType: string;
   records: LogRecord[];
-  parserHints: { detectedFormat: string; foundTraceIds: boolean; foundLatency: boolean };
+  parserHints: { detectedFormat: string; foundTraceIds: boolean; foundLatency: boolean; structuredBlocks: boolean };
   quality: { invalidRowsApprox: number; emptyInput: boolean };
 } {
   const trimmed = content.trim();
@@ -132,23 +275,26 @@ export function parseLogs(content: string, options?: ParseOptions): {
     return {
       sourceType: "empty",
       records: [],
-      parserHints: { detectedFormat: "empty", foundTraceIds: false, foundLatency: false },
+      parserHints: { detectedFormat: "empty", foundTraceIds: false, foundLatency: false, structuredBlocks: false },
       quality: { invalidRowsApprox: 0, emptyInput: true }
     };
   }
 
   const jsonArray = parseJsonInput(trimmed, options);
   const jsonLines = jsonArray ? null : parseJsonLines(trimmed, options);
-  const records = jsonArray || jsonLines || parsePlainText(trimmed, options);
-  const sourceType = jsonArray ? "json" : jsonLines ? "jsonl" : "text";
+  const embeddedJson = !jsonArray && !jsonLines ? extractEmbeddedJsonObjects(trimmed, options) : [];
+  const plain = !jsonArray && !jsonLines && embeddedJson.length === 0 ? parsePlainText(trimmed, options) : [];
+  const records = jsonArray || jsonLines || embeddedJson || plain;
+  const sourceType = jsonArray ? "json" : jsonLines ? "jsonl" : embeddedJson.length ? "structured-text" : "text";
 
   return {
     sourceType,
     records,
     parserHints: {
       detectedFormat: sourceType,
-      foundTraceIds: records.some((r) => !/^TRC-\d{5}$/.test(r.traceId) && !/^TRC-[A-Z0-9]{8}$/.test(r.traceId)),
-      foundLatency: records.some((r) => r.latencyMs > 0)
+      foundTraceIds: records.some((r) => Boolean(r.traceId)),
+      foundLatency: records.some((r) => r.latencyMs > 0),
+      structuredBlocks: embeddedJson.length > 0,
     },
     quality: {
       invalidRowsApprox: 0,
@@ -208,6 +354,7 @@ export function buildMetrics(records: LogRecord[]) {
   })).sort((a, b) => a.time.localeCompare(b.time));
 
   const traceMap = records.reduce<Record<string, number>>((acc, row) => {
+    if (!row.traceId) return acc;
     acc[row.traceId] = (acc[row.traceId] || 0) + 1;
     return acc;
   }, {});

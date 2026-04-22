@@ -5,6 +5,30 @@ import { notFound } from "next/navigation";
 // Cap total records in memory across all uploads to prevent OOM on overview
 const MAX_OVERVIEW_RECORDS = 50_000;
 
+/** Lightweight query for the layout shell — no uploads, no records processing */
+export async function getWorkspaceBasic(workspaceId: string, slug: string, userId: string) {
+  const workspace = await db.workspace.findUnique({
+    where: { id: workspaceId },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      planTier: true,
+      memberships: {
+        where: { userId },
+        select: { role: true },
+        take: 1,
+      },
+    },
+  });
+
+  if (!workspace || workspace.slug !== slug) notFound();
+  const membership = workspace.memberships[0];
+  if (!membership) notFound();
+
+  return { workspace, membership };
+}
+
 export async function getWorkspaceContext(workspaceId: string, slug: string, userId: string) {
   const workspace = await db.workspace.findUnique({
     where: { id: workspaceId },

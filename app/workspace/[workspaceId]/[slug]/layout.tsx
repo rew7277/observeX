@@ -1,18 +1,19 @@
 import { ReactNode } from "react";
 import { requireUser } from "@/lib/auth";
-import { getWorkspaceContext } from "@/lib/workspace";
+import { getWorkspaceBasic } from "@/lib/workspace";
 import { Sidebar } from "@/components/sidebar";
 import { LogoutButton } from "@/components/logout-button";
 
 export default async function WorkspaceLayout({ children, params }: { children: ReactNode; params: Promise<{ workspaceId: string; slug: string }>; }) {
   const user = await requireUser();
   const { workspaceId, slug } = await params;
-  const { workspace, membership } = await getWorkspaceContext(workspaceId, slug, user.id);
+  // Use lightweight query — layout only needs workspace name + membership role
+  const { workspace, membership } = await getWorkspaceBasic(workspaceId, slug, user.id);
 
   return (
     <div className="relative z-10 flex min-h-screen">
       <Sidebar workspaceId={workspaceId} slug={workspace.slug} />
-      <main className="flex-1 p-5 md:p-7 xl:p-8 2xl:p-10">
+      <main className="flex-1 min-w-0 p-5 md:p-7 xl:p-8 2xl:p-10">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm text-slate-400">Workspace</div>

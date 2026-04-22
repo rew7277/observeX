@@ -195,7 +195,18 @@ export async function createAlertRuleAction(formData: FormData) {
     return { ok: false, message: "You do not have permission to create alert rules." };
   }
 
-  await db.alertRule.create({ data: parsed.data });
+  await db.alertRule.create({
+    data: {
+      name: parsed.data.name,
+      metric: parsed.data.metric,
+      operator: parsed.data.operator,
+      threshold: parsed.data.threshold,
+      severity: parsed.data.severity,
+      workspace: {
+        connect: { id: parsed.data.workspaceId }
+      }
+    }
+  });
 
   await db.auditEvent.create({
     data: {

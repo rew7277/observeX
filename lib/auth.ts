@@ -4,7 +4,13 @@ import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { getJwtSecret } from "@/lib/security";
 
-const secret = getJwtSecret();
+// Lazily resolve the secret at request time, not at module load time.
+// Calling getJwtSecret() at the top level causes Next.js to evaluate it
+// during the static build phase (when collecting page data), where
+// JWT_SECRET is not yet available, crashing the build.
+function secret() {
+  return getJwtSecret();
+}
 
 type SessionPayload = {
   userId: string;
@@ -18,7 +24,7 @@ export async function createSession(payload: SessionPayload) {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("7d")
-    .sign(secret);
+    .sign(secret());
 
   const store = await cookies();
   store.set("observex_session", token, {
@@ -41,7 +47,7 @@ export async function getSession() {
   if (!token) return null;
 
   try {
-    const verified = await jwtVerify(token, secret);
+    const verified = await jwtVerify(token, secret());
     return verified.payload as unknown as SessionPayload;
   } catch {
     return null;

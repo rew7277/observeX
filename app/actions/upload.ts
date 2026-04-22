@@ -3,17 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { parseLogs } from "@/lib/log-parser";
+import { ingestUpload } from "@/lib/ingestion";
 
-// Safety caps to prevent DB timeouts and 502s on large files
-const MAX_FILE_BYTES = 15 * 1024 * 1024;   // 15 MB raw text limit
-const MAX_STORED_RECORDS = 10_000;           // Store up to 10k parsed records
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
+const ALLOWED_EXTENSIONS = ["log", "txt", "json", "jsonl"];
 
 export async function uploadLogAction(formData: FormData) {
   const user = await requireUser();
   const workspaceId = String(formData.get("workspaceId") || "");
-  const fileName    = String(formData.get("fileName")    || "uploaded.log");
-  const content     = String(formData.get("content")     || "");
+  const fileName = String(formData.get("fileName") || "uploaded.log");
+  const content = String(formData.get("content") || "");
   const sourceLabel = String(formData.get("sourceLabel") || "manual upload");
   const environment = String(formData.get("environment") || "unknown");
 
@@ -21,66 +20,90 @@ export async function uploadLogAction(formData: FormData) {
     return { ok: false, message: "Please provide a valid log file." };
   }
 
-  // Guard: reject files that are too large before any heavy processing
+  const ext = fileName.split(".").pop()?.toLowerCase() || "";
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return { ok: false, message: `Unsupported file type .${ext || "unknown"}. Allowed: ${ALLOWED_EXTENSIONS.join(", ")}.` };
+  }
+
   const byteSize = new TextEncoder().encode(content).length;
   if (byteSize > MAX_FILE_BYTES) {
     const mb = (byteSize / 1024 / 1024).toFixed(1);
     return { ok: false, message: `File is ${mb} MB — maximum allowed size is 15 MB.` };
   }
 
-  const membership = await db.membership.findFirst({
-    where: { workspaceId, userId: user.id }
-  });
+  const membership = await db.membership.findFirst({ where: { workspaceId, userId: user.id } });
   if (!membership) {
     return { ok: false, message: "You do not have access to this workspace." };
   }
 
-  const parsed = parseLogs(content);
-  const totalRecords  = parsed.records.length;
-  const cappedRecords = parsed.records.slice(0, MAX_STORED_RECORDS);
-  const wasCapped     = totalRecords > MAX_STORED_RECORDS;
+  const workspace = await db.workspace.findUnique({ where: { id: workspaceId } });
+  if (!workspace) return { ok: false, message: "Workspace not found." };
 
-  await db.upload.create({
+  const upload = await db.upload.create({
     data: {
       workspaceId,
       uploadedById: user.id,
       fileName,
-      sourceType:  "upload",
-      // Store content type + record count metadata instead of full raw text
-      // rawText kept minimal to avoid massive Postgres writes causing 502s
-      contentType: fileName.split(".").pop() || "text",
+      sourceType: "upload",
+      contentType: ext || "text",
       sourceLabel,
       environment,
-      rawText: wasCapped
-        ? `[${totalRecords.toLocaleString()} records parsed — showing first ${MAX_STORED_RECORDS.toLocaleString()}]`
-        : `[${totalRecords.toLocaleString()} records]`,
-      parsedJson: cappedRecords as any
+      status: "processing",
+      fileSizeBytes: byteSize,
+      rawText: `[processing ${fileName}]`,
+      parsedJson: [] as any
     }
   });
 
-  const workspace = await db.workspace.findUnique({ where: { id: workspaceId } });
-  await db.auditEvent.create({
-    data: {
+  try {
+    const result = await ingestUpload({
       workspaceId,
-      userId: user.id,
-      action: "upload.created",
-      details: wasCapped
-        ? `${fileName}: ${totalRecords.toLocaleString()} records parsed (stored first ${MAX_STORED_RECORDS.toLocaleString()})`
-        : `${fileName}: ${totalRecords.toLocaleString()} records parsed`
-    }
-  });
+      uploadId: upload.id,
+      content,
+      environmentHint: environment
+    });
 
-  const base = `/workspace/${workspaceId}/${workspace?.slug}`;
-  revalidatePath(`${base}/overview`);
-  revalidatePath(`${base}/upload`);
-  revalidatePath(`${base}/live-logs`);
-  revalidatePath(`${base}/alerts`);
-  revalidatePath(`${base}/flow-analytics`);
-  revalidatePath(`${base}/security`);
+    await db.upload.update({
+      where: { id: upload.id },
+      data: {
+        status: "completed",
+        fileSizeBytes: byteSize,
+        recordCount: result.recordCount,
+        processedCount: result.recordCount,
+        maskedCount: result.maskedCount,
+        droppedCount: 0,
+        contentType: result.parsed.sourceType,
+        rawText: `[${result.recordCount.toLocaleString()} records persisted to log_events]`,
+        parsedJson: result.parsed.records.slice(0, 1000) as any,
+        summaryJson: result.summary as any,
+        fingerprint: result.fingerprint,
+        completedAt: new Date()
+      }
+    });
 
-  const msg = wasCapped
-    ? `${fileName} uploaded — ${totalRecords.toLocaleString()} records parsed (displaying first ${MAX_STORED_RECORDS.toLocaleString()}).`
-    : `${fileName} uploaded — ${totalRecords.toLocaleString()} records parsed successfully.`;
+    await db.auditEvent.create({
+      data: {
+        workspaceId,
+        userId: user.id,
+        action: "upload.created",
+        details: `${fileName}: ${result.recordCount.toLocaleString()} records stored, ${result.maskedCount.toLocaleString()} masked/flagged for PII review`
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Ingestion failed";
+    await db.upload.update({
+      where: { id: upload.id },
+      data: {
+        status: "failed",
+        ingestionError: message,
+        rawText: `[ingestion failed]`
+      }
+    });
+    return { ok: false, message };
+  }
 
-  return { ok: true, message: msg };
+  const base = `/workspace/${workspaceId}/${workspace.slug}`;
+  ["overview", "upload", "live-logs", "alerts", "flow-analytics", "security", "sources"].forEach((page) => revalidatePath(`${base}/${page}`));
+
+  return { ok: true, message: `${fileName} uploaded and indexed successfully.` };
 }

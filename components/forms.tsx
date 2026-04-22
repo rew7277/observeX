@@ -30,6 +30,8 @@ export function WorkspaceProfileForm({ workspace }: { workspace: any }) {
             <input name="billingEmail" className="input" defaultValue={workspace.billingEmail || ""} placeholder="Billing email" />
             <input name="domain" className="input" defaultValue={workspace.domain || ""} placeholder="Custom domain" />
             <input name="retentionDays" type="number" className="input" defaultValue={workspace.retentionDays} placeholder="Retention days" />
+            <input name="maxMonthlyIngestMb" type="number" className="input" defaultValue={workspace.maxMonthlyIngestMb || 512} placeholder="Monthly ingest limit (MB)" />
+            <input name="maxUsers" type="number" className="input" defaultValue={workspace.maxUsers || 5} placeholder="Max users" />
             <select name="ingestionMode" className="input" defaultValue={workspace.ingestionMode}>
               <option value="manual-upload">Manual upload</option>
               <option value="hybrid">Hybrid upload + scheduled source</option>
@@ -95,7 +97,12 @@ export function SourceForm({ workspaceId }: { workspaceId: string }) {
             <input name="region" className="input" placeholder="Region" />
             <input name="prefix" className="input" placeholder="Prefix" />
             <input name="schedule" className="input" placeholder="Schedule (cron or text)" />
-            <input name="authType" className="input" placeholder="Auth type" defaultValue="bearer" />
+            <select name="authType" className="input" defaultValue="bearer">
+              <option value="none">None</option>
+              <option value="bearer">Bearer</option>
+              <option value="basic">Basic</option>
+              <option value="iam">IAM/Role</option>
+            </select>
           </div>
           <div className="flex items-center gap-3">
             <button className="btn-primary" disabled={pending}>{pending ? "Adding..." : "Add source"}</button>
@@ -118,8 +125,10 @@ export function AlertRuleForm({ workspaceId }: { workspaceId: string }) {
             <select name="metric" className="input" defaultValue="errorRate">
               <option value="errorRate">Error rate</option>
               <option value="avgLatency">Average latency</option>
+              <option value="p95Latency">P95 latency</option>
               <option value="warnCount">Warn count</option>
               <option value="criticalSignals">Critical signals</option>
+              <option value="piiEvents">Sensitive-data events</option>
             </select>
             <select name="operator" className="input" defaultValue=">=">
               <option value=">">&gt;</option>

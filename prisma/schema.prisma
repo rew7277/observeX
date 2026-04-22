@@ -40,44 +40,69 @@ enum SourceStatus {
   error
 }
 
+enum UploadStatus {
+  queued
+  processing
+  completed
+  failed
+}
+
+enum AuthEventType {
+  login_success
+  login_failed
+  register_success
+  password_reset_requested
+}
+
 model User {
-  id           String       @id @default(cuid())
-  name         String
-  email        String       @unique
-  passwordHash String
-  createdAt    DateTime     @default(now())
-  memberships  Membership[]
-  ownedWorkspaces Workspace[] @relation("WorkspaceOwner")
-  uploads      Upload[]
-  invites      Invite[]     @relation("InviteCreator")
-  auditEvents  AuditEvent[]
+  id              String          @id @default(cuid())
+  name            String
+  email           String          @unique
+  passwordHash    String
+  emailVerifiedAt DateTime?
+  sessionVersion  Int             @default(1)
+  mfaEnabled      Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  memberships     Membership[]
+  ownedWorkspaces Workspace[]     @relation("WorkspaceOwner")
+  uploads         Upload[]
+  invites         Invite[]        @relation("InviteCreator")
+  auditEvents     AuditEvent[]
+  authEvents      AuthEvent[]
 }
 
 model Workspace {
-  id                   String          @id @default(cuid())
-  slug                 String
-  name                 String
-  description          String?
-  ownerId              String
-  planTier             PlanTier        @default(starter)
-  billingEmail         String?
-  domain               String?
-  ingestionMode        String          @default("manual")
-  retentionDays        Int             @default(30)
-  logStorageMode       String          @default("database")
-  s3Bucket             String?
-  s3Region             String?
-  s3Prefix             String?
-  primaryColor         String          @default("cyan")
-  createdAt            DateTime        @default(now())
-  owner                User            @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  memberships          Membership[]
-  uploads              Upload[]
-  invites              Invite[]
-  apiSources           ApiSource[]
-  alertRules           AlertRule[]
-  savedViews           SavedView[]
-  auditEvents          AuditEvent[]
+  id                    String           @id @default(cuid())
+  slug                  String
+  name                  String
+  description           String?
+  ownerId               String
+  planTier              PlanTier         @default(starter)
+  billingEmail          String?
+  domain                String?
+  ingestionMode         String           @default("manual")
+  retentionDays         Int              @default(30)
+  logStorageMode        String           @default("database")
+  environmentPolicyJson Json?
+  maxMonthlyIngestMb    Int              @default(512)
+  maxUsers              Int              @default(5)
+  s3Bucket              String?
+  s3Region              String?
+  s3Prefix              String?
+  primaryColor          String           @default("cyan")
+  createdAt             DateTime         @default(now())
+  owner                 User             @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships           Membership[]
+  uploads               Upload[]
+  invites               Invite[]
+  apiSources            ApiSource[]
+  alertRules            AlertRule[]
+  savedViews            SavedView[]
+  savedSearches         SavedSearch[]
+  sourceRuns            SourceRun[]
+  logEvents             LogEvent[]
+  apiKeys               ApiKey[]
+  auditEvents           AuditEvent[]
 
   @@unique([ownerId, slug])
 }
@@ -95,31 +120,74 @@ model Membership {
 }
 
 model Upload {
-  id           String     @id @default(cuid())
-  workspaceId  String
-  uploadedById String
-  fileName     String
-  sourceType   SourceType @default(upload)
-  contentType  String?
-  sourceLabel  String?
-  environment  String?
-  rawText      String
-  parsedJson   Json
-  createdAt    DateTime   @default(now())
-  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  uploadedBy   User       @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  id              String       @id @default(cuid())
+  workspaceId     String
+  uploadedById    String
+  fileName        String
+  sourceType      SourceType   @default(upload)
+  contentType     String?
+  sourceLabel     String?
+  environment     String?
+  status          UploadStatus @default(queued)
+  fileSizeBytes   Int          @default(0)
+  recordCount     Int          @default(0)
+  processedCount  Int          @default(0)
+  maskedCount     Int          @default(0)
+  droppedCount    Int          @default(0)
+  rawText         String
+  parsedJson      Json
+  summaryJson     Json?
+  ingestionError  String?
+  fingerprint     String?
+  createdAt       DateTime     @default(now())
+  completedAt     DateTime?
+  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy      User         @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  logEvents       LogEvent[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([workspaceId, status])
+}
+
+model LogEvent {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  uploadId        String?
+  timestamp       DateTime
+  level           String
+  application     String
+  environment     String
+  traceId         String
+  latencyMs       Int       @default(0)
+  message         String
+  signature       String
+  containsPii     Boolean   @default(false)
+  piiTypes        String[]
+  payloadJson     Json?
+  createdAt       DateTime  @default(now())
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  upload          Upload?   @relation(fields: [uploadId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, timestamp(sort: Desc)])
+  @@index([workspaceId, application, timestamp(sort: Desc)])
+  @@index([workspaceId, environment, timestamp(sort: Desc)])
+  @@index([workspaceId, level, timestamp(sort: Desc)])
+  @@index([workspaceId, traceId])
+  @@index([workspaceId, containsPii])
 }
 
 model Invite {
-  id          String       @id @default(cuid())
+  id          String         @id @default(cuid())
   workspaceId String
   email       String
   role        MembershipRole @default(viewer)
-  status      InviteStatus @default(pending)
+  status      InviteStatus   @default(pending)
+  token       String?        @unique
+  expiresAt   DateTime?
   createdById String
-  createdAt   DateTime     @default(now())
-  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy   User         @relation("InviteCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt   DateTime       @default(now())
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User           @relation("InviteCreator", fields: [createdById], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, status])
 }
@@ -136,8 +204,29 @@ model ApiSource {
   prefix          String?
   schedule        String?
   authType        String?      @default("none")
+  secretRef       String?
+  lastTestedAt    DateTime?
+  lastSyncAt      DateTime?
+  lastError       String?
   createdAt       DateTime     @default(now())
   workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceRuns      SourceRun[]
+}
+
+model SourceRun {
+  id              String       @id @default(cuid())
+  workspaceId     String
+  apiSourceId     String?
+  status          SourceStatus @default(active)
+  recordsFetched  Int          @default(0)
+  recordsStored   Int          @default(0)
+  errorMessage    String?
+  startedAt       DateTime     @default(now())
+  completedAt     DateTime?
+  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  apiSource       ApiSource?   @relation(fields: [apiSourceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, startedAt(sort: Desc)])
 }
 
 model AlertRule {
@@ -162,6 +251,27 @@ model SavedView {
   workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
+model SavedSearch {
+  id            String       @id @default(cuid())
+  workspaceId   String
+  name          String
+  query         String
+  filtersJson   Json?
+  createdAt     DateTime     @default(now())
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id            String       @id @default(cuid())
+  workspaceId   String
+  name          String
+  keyPrefix     String
+  secretHash    String
+  lastUsedAt    DateTime?
+  createdAt     DateTime     @default(now())
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
 model AuditEvent {
   id            String       @id @default(cuid())
   workspaceId   String
@@ -171,4 +281,21 @@ model AuditEvent {
   createdAt     DateTime     @default(now())
   workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+}
+
+model AuthEvent {
+  id            String        @id @default(cuid())
+  email         String
+  userId        String?
+  type          AuthEventType
+  ipAddress     String?
+  userAgent     String?
+  success       Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  user          User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
 }

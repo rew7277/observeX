@@ -1,14 +1,16 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
+import { getJwtSecret } from "@/lib/security";
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET || "dev-secret-change-me");
+const secret = getJwtSecret();
 
 type SessionPayload = {
   userId: string;
   email: string;
   name: string;
+  sessionVersion: number;
 };
 
 export async function createSession(payload: SessionPayload) {
@@ -46,12 +48,20 @@ export async function getSession() {
   }
 }
 
+export async function getRequestMeta() {
+  const h = await headers();
+  return {
+    ipAddress: h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || undefined,
+    userAgent: h.get("user-agent") || undefined
+  };
+}
+
 export async function requireUser() {
   const session = await getSession();
   if (!session) redirect("/login");
 
   const user = await db.user.findUnique({ where: { id: session.userId } });
-  if (!user) redirect("/login");
+  if (!user || user.sessionVersion !== session.sessionVersion) redirect("/login");
 
   return user;
 }

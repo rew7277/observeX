@@ -5,11 +5,11 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { slugify } from "@/lib/slug";
 import { alertRuleSchema, apiSourceSchema, inviteSchema, workspaceProfileSchema } from "@/lib/validators";
+import { hasPermission } from "@/lib/permissions";
+import { createOpaqueToken, sanitizeFreeText } from "@/lib/security";
 
 async function getAllowedMembership(workspaceId: string, userId: string) {
-  const membership = await db.membership.findFirst({
-    where: { workspaceId, userId }
-  });
+  const membership = await db.membership.findFirst({ where: { workspaceId, userId } });
   if (!membership) return null;
   return membership;
 }
@@ -18,7 +18,7 @@ async function refreshWorkspace(workspaceId: string) {
   const workspace = await db.workspace.findUnique({ where: { id: workspaceId } });
   if (!workspace) return;
   const base = `/workspace/${workspace.id}/${workspace.slug}`;
-  ["overview", "settings", "team", "sources", "billing", "alerts"].forEach((page) => revalidatePath(`${base}/${page}`));
+  ["overview", "settings", "team", "sources", "billing", "alerts", "security", "live-logs", "flow-analytics"].forEach((page) => revalidatePath(`${base}/${page}`));
 }
 
 export async function updateWorkspaceProfileAction(formData: FormData) {
@@ -33,22 +33,24 @@ export async function updateWorkspaceProfileAction(formData: FormData) {
     retentionDays: formData.get("retentionDays"),
     ingestionMode: formData.get("ingestionMode"),
     logStorageMode: formData.get("logStorageMode"),
+    maxMonthlyIngestMb: formData.get("maxMonthlyIngestMb"),
+    maxUsers: formData.get("maxUsers"),
     s3Bucket: formData.get("s3Bucket"),
     s3Region: formData.get("s3Region"),
     s3Prefix: formData.get("s3Prefix")
   });
 
-  if (!parsed.success) return { ok: false, message: "Please provide valid workspace settings." };
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message || "Please provide valid workspace settings." };
 
   const membership = await getAllowedMembership(parsed.data.workspaceId, user.id);
-  if (!membership || !["owner", "admin", "manager"].includes(membership.role)) {
-    return { ok: false, message: "Only owners, admins, or managers can update workspace settings." };
+  if (!membership || !hasPermission(membership.role, "workspace:update")) {
+    return { ok: false, message: "You do not have permission to update workspace settings." };
   }
 
   await db.workspace.update({
     where: { id: parsed.data.workspaceId },
     data: {
-      name: parsed.data.name,
+      name: sanitizeFreeText(parsed.data.name, 80),
       slug: slugify(parsed.data.slug),
       description: parsed.data.description || null,
       billingEmail: parsed.data.billingEmail || null,
@@ -56,6 +58,8 @@ export async function updateWorkspaceProfileAction(formData: FormData) {
       retentionDays: parsed.data.retentionDays,
       ingestionMode: parsed.data.ingestionMode,
       logStorageMode: parsed.data.logStorageMode,
+      maxMonthlyIngestMb: parsed.data.maxMonthlyIngestMb,
+      maxUsers: parsed.data.maxUsers,
       s3Bucket: parsed.data.s3Bucket || null,
       s3Region: parsed.data.s3Region || null,
       s3Prefix: parsed.data.s3Prefix || null
@@ -67,7 +71,7 @@ export async function updateWorkspaceProfileAction(formData: FormData) {
       workspaceId: parsed.data.workspaceId,
       userId: user.id,
       action: "workspace.updated",
-      details: "Workspace profile updated"
+      details: "Workspace profile and platform limits updated"
     }
   });
 
@@ -85,16 +89,20 @@ export async function createInviteAction(formData: FormData) {
 
   if (!parsed.success) return { ok: false, message: "Please provide a valid invite." };
   const membership = await getAllowedMembership(parsed.data.workspaceId, user.id);
-  if (!membership || !["owner", "admin"].includes(membership.role)) {
-    return { ok: false, message: "Only owners and admins can invite members." };
+  if (!membership || !hasPermission(membership.role, "member:invite")) {
+    return { ok: false, message: "You do not have permission to invite members." };
   }
+
+  const token = createOpaqueToken("invite");
 
   await db.invite.create({
     data: {
       workspaceId: parsed.data.workspaceId,
       email: parsed.data.email,
       role: parsed.data.role,
-      createdById: user.id
+      createdById: user.id,
+      token,
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7)
     }
   });
 
@@ -108,7 +116,7 @@ export async function createInviteAction(formData: FormData) {
   });
 
   await refreshWorkspace(parsed.data.workspaceId);
-  return { ok: true, message: "Invite created." };
+  return { ok: true, message: "Invite created with expiring token metadata." };
 }
 
 export async function createApiSourceAction(formData: FormData) {
@@ -125,23 +133,35 @@ export async function createApiSourceAction(formData: FormData) {
     authType: formData.get("authType")
   });
 
-  if (!parsed.success) return { ok: false, message: "Please provide valid source details." };
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message || "Please provide valid source details." };
   const membership = await getAllowedMembership(parsed.data.workspaceId, user.id);
-  if (!membership || !["owner", "admin", "developer"].includes(membership.role)) {
-    return { ok: false, message: "Only owners, admins, or developers can add sources." };
+  if (!membership || !hasPermission(membership.role, "source:write")) {
+    return { ok: false, message: "You do not have permission to add sources." };
   }
 
-  await db.apiSource.create({
+  const source = await db.apiSource.create({
     data: {
       workspaceId: parsed.data.workspaceId,
-      name: parsed.data.name,
+      name: sanitizeFreeText(parsed.data.name, 80),
       type: parsed.data.type,
       endpointUrl: parsed.data.endpointUrl || null,
       bucketName: parsed.data.bucketName || null,
       region: parsed.data.region || null,
       prefix: parsed.data.prefix || null,
       schedule: parsed.data.schedule || null,
-      authType: parsed.data.authType || "none"
+      authType: parsed.data.authType || "none",
+      secretRef: `secret://${parsed.data.workspaceId}/${slugify(parsed.data.name)}-${Date.now()}`,
+      lastError: null
+    }
+  });
+
+  await db.sourceRun.create({
+    data: {
+      workspaceId: parsed.data.workspaceId,
+      apiSourceId: source.id,
+      status: "paused",
+      errorMessage: "Connector created. Health test not yet implemented.",
+      completedAt: new Date()
     }
   });
 
@@ -155,7 +175,7 @@ export async function createApiSourceAction(formData: FormData) {
   });
 
   await refreshWorkspace(parsed.data.workspaceId);
-  return { ok: true, message: "Source added." };
+  return { ok: true, message: "Source added with operational metadata." };
 }
 
 export async function createAlertRuleAction(formData: FormData) {
@@ -169,15 +189,13 @@ export async function createAlertRuleAction(formData: FormData) {
     severity: formData.get("severity")
   });
 
-  if (!parsed.success) return { ok: false, message: "Please provide valid alert rule details." };
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message || "Please provide valid alert rule details." };
   const membership = await getAllowedMembership(parsed.data.workspaceId, user.id);
-  if (!membership || !["owner", "admin", "manager"].includes(membership.role)) {
-    return { ok: false, message: "Only owners, admins, or managers can create alert rules." };
+  if (!membership || !hasPermission(membership.role, "alert:write")) {
+    return { ok: false, message: "You do not have permission to create alert rules." };
   }
 
-  await db.alertRule.create({
-    data: parsed.data
-  });
+  await db.alertRule.create({ data: parsed.data });
 
   await db.auditEvent.create({
     data: {

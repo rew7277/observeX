@@ -39,8 +39,7 @@ function parseJsonInput(content: string): LogRecord[] | null {
 }
 
 function parseJsonLines(content: string): LogRecord[] | null {
-  const lines = content.split(/?
-/).map((line) => line.trim()).filter(Boolean);
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (!lines.length) return null;
 
   const rows: LogRecord[] = [];
@@ -56,8 +55,7 @@ function parseJsonLines(content: string): LogRecord[] | null {
 }
 
 function parsePlainText(content: string): LogRecord[] {
-  const lines = content.split(/?
-/).map((line) => line.trim()).filter(Boolean);
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const regex = /^(?<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(?:\.\d+)?\s*(?:\[(?<level>[A-Z]+)\])?\s*(?:\[(?<application>[^\]]+)\])?\s*(?:\[(?<environment>[^\]]+)\])?\s*(?:trace(?:Id)?=(?<traceId>[^\s]+))?\s*(?:latency(?:Ms)?=(?<latencyMs>\d+))?\s*(?:message=)?(?:"(?<messageQuoted>.*)"|(?<message>.*))$/i;
 
   return lines.map((line, index) => {

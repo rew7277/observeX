@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String      @id @default(cuid())
+  name         String
+  email        String      @unique
+  passwordHash String
+  createdAt    DateTime    @default(now())
+  workspaces   Workspace[] @relation("WorkspaceOwner")
+  memberships  Membership[]
+  uploads      Upload[]
+}
+
+model Workspace {
+  id          String       @id @default(cuid())
+  slug        String
+  name        String
+  ownerId     String
+  createdAt   DateTime     @default(now())
+  owner       User         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+  uploads     Upload[]
+
+  @@unique([ownerId, slug])
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        String
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+model Upload {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  uploadedById String
+  fileName     String
+  sourceType   String
+  rawText      String
+  parsedJson   Json
+  createdAt    DateTime  @default(now())
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy   User      @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+}

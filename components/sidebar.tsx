@@ -6,20 +6,29 @@ import { useEffect, useState } from "react";
 import {
   Shield, LayoutDashboard, Upload, Activity, Bell,
   Workflow, Settings, Users, DatabaseZap, WalletCards,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Search, Siren, Radar, ScanSearch, Gauge, GitCompareArrows, FileOutput, PieChart,
 } from "lucide-react";
 
 const items = [
-  { label: "Overview",       icon: LayoutDashboard, href: "overview"        },
-  { label: "Upload Logs",    icon: Upload,           href: "upload"          },
-  { label: "Live Logs",      icon: Activity,         href: "live-logs"       },
+  { label: "Overview",       icon: LayoutDashboard,   href: "overview"        },
+  { label: "Search",         icon: Search,            href: "search"          },
+  { label: "Upload Logs",    icon: Upload,            href: "upload"          },
+  { label: "Live Logs",      icon: Activity,          href: "live-logs"       },
+  { label: "Trace Explorer", icon: ScanSearch,        href: "trace-explorer"  },
   { label: "Flow Analytics", icon: Workflow,          href: "flow-analytics"  },
-  { label: "Alerts",         icon: Bell,             href: "alerts"          },
-  { label: "Security",       icon: Shield,           href: "security"        },
-  { label: "Team",           icon: Users,            href: "team"            },
-  { label: "Sources",        icon: DatabaseZap,      href: "sources"         },
-  { label: "Billing",        icon: WalletCards,      href: "billing"         },
-  { label: "Settings",       icon: Settings,         href: "settings"        },
+  { label: "Anomalies",      icon: Radar,             href: "anomalies"       },
+  { label: "Incidents",      icon: Siren,             href: "incidents"       },
+  { label: "Latency",        icon: Gauge,             href: "latency"         },
+  { label: "Compare",        icon: GitCompareArrows,  href: "compare"         },
+  { label: "Alerts",         icon: Bell,              href: "alerts"          },
+  { label: "Security",       icon: Shield,            href: "security"        },
+  { label: "PII Scanner",    icon: Shield,            href: "pii-scanner"     },
+  { label: "Sources",        icon: DatabaseZap,       href: "sources"         },
+  { label: "Exports",        icon: FileOutput,        href: "exports"         },
+  { label: "Quotas",         icon: PieChart,          href: "quotas"          },
+  { label: "Team",           icon: Users,             href: "team"            },
+  { label: "Billing",        icon: WalletCards,       href: "billing"         },
+  { label: "Settings",       icon: Settings,          href: "settings"        },
 ];
 
 export function Sidebar({ workspaceId, slug }: { workspaceId: string; slug: string }) {

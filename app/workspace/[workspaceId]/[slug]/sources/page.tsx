@@ -2,11 +2,13 @@ import { Panel } from "@/components/panel";
 import { SourceForm } from "@/components/forms";
 import { requireUser } from "@/lib/auth";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { getSourceHealth } from "@/lib/source-health";
 
 export default async function SourcesPage({ params }: { params: Promise<{ workspaceId: string; slug: string }>; }) {
   const user = await requireUser();
   const { workspaceId, slug } = await params;
   const { workspace } = await getWorkspaceContext(workspaceId, slug, user.id);
+  const health = await getSourceHealth(workspaceId);
 
   return (
     <div className="space-y-6">
@@ -15,6 +17,21 @@ export default async function SourcesPage({ params }: { params: Promise<{ worksp
         <h1 className="mt-4 text-4xl font-semibold tracking-tight md:text-5xl">API and S3 ingestion sources</h1>
         <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-400 md:text-base">Sources now keep operational metadata so you can extend into workers, health checks, retries, and scheduled syncs.</p>
       </header>
+
+      <div className="grid gap-5 md:grid-cols-4">
+        {[
+          ["Configured sources", health.summary.total],
+          ["Active", health.summary.active],
+          ["Unhealthy", health.summary.unhealthy],
+          ["Stale syncs", health.summary.stale],
+        ].map(([label, value]) => (
+          <Panel key={String(label)} className="p-5">
+            <div className="text-xs text-slate-400">{label}</div>
+            <div className="mt-2 text-2xl font-semibold">{value}</div>
+          </Panel>
+        ))}
+      </div>
+
       <Panel className="p-5 md:p-6">
         <div className="text-lg font-semibold">Add new source</div>
         <div className="mt-4"><SourceForm workspaceId={workspaceId} /></div>

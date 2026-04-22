@@ -18,7 +18,7 @@ async function refreshWorkspace(workspaceId: string) {
   const workspace = await db.workspace.findUnique({ where: { id: workspaceId } });
   if (!workspace) return;
   const base = `/workspace/${workspace.id}/${workspace.slug}`;
-  ["overview", "settings", "team", "sources", "billing", "alerts", "security", "live-logs", "flow-analytics"].forEach((page) => revalidatePath(`${base}/${page}`));
+  ["overview", "settings", "team", "sources", "billing", "alerts", "security", "live-logs", "flow-analytics", "search", "anomalies", "incidents", "latency", "compare", "trace-explorer", "pii-scanner", "exports", "quotas"].forEach((page) => revalidatePath(`${base}/${page}`));
 }
 
 export async function updateWorkspaceProfileAction(formData: FormData) {

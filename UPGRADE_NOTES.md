@@ -38,3 +38,13 @@ This package upgrades the project from a parsed-upload demo pattern toward a saf
 - Add email verification / forgot password / MFA
 - Add alert execution engine and notification delivery
 - Add saved searches and enterprise API keys
+
+
+## April 22, 2026 upgrade pack
+- Added indexed server-side search library and search API route
+- Added anomaly detection, incident summary, latency analytics, retention/quota helpers
+- Added webhook ingestion endpoint scaffold and source-test endpoint scaffold
+- Added new workspace pages: Search, Anomalies, Incidents, Latency, Compare, Trace Explorer, PII Scanner, Exports, Quotas
+- Hardened JWT secret handling by removing the dev fallback secret
+- Expanded sidebar/navigation and workspace revalidation coverage
+- Added background job helper for queued upload processing / cron integration

@@ -12,9 +12,9 @@ export function requireEnv(name: string, options?: { allowInDev?: boolean; fallb
 }
 
 export function getJwtSecret() {
-  const secret = requireEnv("JWT_SECRET", { allowInDev: true });
-  if (process.env.NODE_ENV === "production" && secret.length < MIN_SECRET_LEN) {
-    throw new Error("JWT_SECRET must be at least 32 characters in production.");
+  const secret = requireEnv("JWT_SECRET");
+  if (secret.length < MIN_SECRET_LEN) {
+    throw new Error("JWT_SECRET must be at least 32 characters.");
   }
   return new TextEncoder().encode(secret);
 }

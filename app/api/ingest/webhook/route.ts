@@ -1,6 +1,13 @@
+import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { buildSignature, detectSensitiveData, maskSensitiveText } from "@/lib/security";
+
+
+function toInputJson(value: unknown): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
+  if (value == null) return Prisma.JsonNull;
+  return value as Prisma.InputJsonValue;
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null) as any;
@@ -23,7 +30,7 @@ export async function POST(request: NextRequest) {
       signature: buildSignature(message),
       containsPii: pii.containsPii,
       piiTypes: pii.piiTypes,
-      payloadJson: event,
+      payloadJson: toInputJson(event),
     };
   });
 

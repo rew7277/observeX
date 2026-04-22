@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { buildMetrics, parseLogs, type LogRecord } from "@/lib/log-parser";
 import { buildSignature, detectSensitiveData, hashValue, maskSensitiveText } from "@/lib/security";
@@ -7,6 +8,11 @@ const INSERT_BATCH_SIZE = 500;
 function toDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function toInputJson(value: Record<string, unknown> | null | undefined): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
+  if (value == null) return Prisma.JsonNull;
+  return value as Prisma.InputJsonValue;
 }
 
 export async function ingestUpload(params: {
@@ -34,7 +40,7 @@ export async function ingestUpload(params: {
       signature: buildSignature(record.message),
       containsPii: detection.containsPii,
       piiTypes: detection.piiTypes,
-      payloadJson: record.payloadJson ?? null
+      payloadJson: toInputJson(record.payloadJson)
     };
   });
 

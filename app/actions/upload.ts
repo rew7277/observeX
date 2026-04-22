@@ -10,6 +10,8 @@ export async function uploadLogAction(formData: FormData) {
   const workspaceId = String(formData.get("workspaceId") || "");
   const fileName = String(formData.get("fileName") || "uploaded.log");
   const content = String(formData.get("content") || "");
+  const sourceLabel = String(formData.get("sourceLabel") || "manual upload");
+  const environment = String(formData.get("environment") || "unknown");
 
   if (!workspaceId || !content.trim()) {
     return { ok: false, message: "Please provide a valid log file." };
@@ -30,15 +32,32 @@ export async function uploadLogAction(formData: FormData) {
       workspaceId,
       uploadedById: user.id,
       fileName,
-      sourceType: parsed.sourceType,
+      sourceType: "upload",
+      contentType: fileName.split(".").pop() || "text",
+      sourceLabel,
+      environment,
       rawText: content,
       parsedJson: parsed.records as any
     }
   });
 
   const workspace = await db.workspace.findUnique({ where: { id: workspaceId } });
-  revalidatePath(`/workspace/${workspaceId}/${workspace?.slug}/overview`);
-  revalidatePath(`/workspace/${workspaceId}/${workspace?.slug}/upload`);
+  await db.auditEvent.create({
+    data: {
+      workspaceId,
+      userId: user.id,
+      action: "upload.created",
+      details: `${fileName} uploaded with ${parsed.records.length} parsed records`
+    }
+  });
+
+  const base = `/workspace/${workspaceId}/${workspace?.slug}`;
+  revalidatePath(`${base}/overview`);
+  revalidatePath(`${base}/upload`);
+  revalidatePath(`${base}/live-logs`);
+  revalidatePath(`${base}/alerts`);
+  revalidatePath(`${base}/flow-analytics`);
+  revalidatePath(`${base}/security`);
 
   return { ok: true, message: `${fileName} uploaded successfully.` };
 }

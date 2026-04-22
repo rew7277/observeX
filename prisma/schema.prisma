@@ -7,51 +7,168 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum MembershipRole {
+  owner
+  admin
+  developer
+  tester
+  manager
+  viewer
+}
+
+enum PlanTier {
+  starter
+  growth
+  enterprise
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  revoked
+}
+
+enum SourceType {
+  upload
+  s3
+  api
+}
+
+enum SourceStatus {
+  active
+  paused
+  error
+}
+
 model User {
-  id           String      @id @default(cuid())
+  id           String       @id @default(cuid())
   name         String
-  email        String      @unique
+  email        String       @unique
   passwordHash String
-  createdAt    DateTime    @default(now())
-  workspaces   Workspace[] @relation("WorkspaceOwner")
+  createdAt    DateTime     @default(now())
   memberships  Membership[]
+  ownedWorkspaces Workspace[] @relation("WorkspaceOwner")
   uploads      Upload[]
+  invites      Invite[]     @relation("InviteCreator")
+  auditEvents  AuditEvent[]
 }
 
 model Workspace {
-  id          String       @id @default(cuid())
-  slug        String
-  name        String
-  ownerId     String
-  createdAt   DateTime     @default(now())
-  owner       User         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  memberships Membership[]
-  uploads     Upload[]
+  id                   String          @id @default(cuid())
+  slug                 String
+  name                 String
+  description          String?
+  ownerId              String
+  planTier             PlanTier        @default(starter)
+  billingEmail         String?
+  domain               String?
+  ingestionMode        String          @default("manual")
+  retentionDays        Int             @default(30)
+  logStorageMode       String          @default("database")
+  s3Bucket             String?
+  s3Region             String?
+  s3Prefix             String?
+  primaryColor         String          @default("cyan")
+  createdAt            DateTime        @default(now())
+  owner                User            @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships          Membership[]
+  uploads              Upload[]
+  invites              Invite[]
+  apiSources           ApiSource[]
+  alertRules           AlertRule[]
+  savedViews           SavedView[]
+  auditEvents          AuditEvent[]
 
   @@unique([ownerId, slug])
 }
 
 model Membership {
-  id          String    @id @default(cuid())
+  id          String         @id @default(cuid())
   userId      String
   workspaceId String
-  role        String
-  createdAt   DateTime  @default(now())
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role        MembershipRole @default(viewer)
+  createdAt   DateTime       @default(now())
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([userId, workspaceId])
 }
 
 model Upload {
-  id           String    @id @default(cuid())
+  id           String     @id @default(cuid())
   workspaceId  String
   uploadedById String
   fileName     String
-  sourceType   String
+  sourceType   SourceType @default(upload)
+  contentType  String?
+  sourceLabel  String?
+  environment  String?
   rawText      String
   parsedJson   Json
-  createdAt    DateTime  @default(now())
-  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  uploadedBy   User      @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy   User       @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+}
+
+model Invite {
+  id          String       @id @default(cuid())
+  workspaceId String
+  email       String
+  role        MembershipRole @default(viewer)
+  status      InviteStatus @default(pending)
+  createdById String
+  createdAt   DateTime     @default(now())
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User         @relation("InviteCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+}
+
+model ApiSource {
+  id              String       @id @default(cuid())
+  workspaceId     String
+  name            String
+  type            SourceType   @default(api)
+  status          SourceStatus @default(active)
+  endpointUrl     String?
+  bucketName      String?
+  region          String?
+  prefix          String?
+  schedule        String?
+  authType        String?      @default("none")
+  createdAt       DateTime     @default(now())
+  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model AlertRule {
+  id            String       @id @default(cuid())
+  workspaceId   String
+  name          String
+  metric        String
+  operator      String
+  threshold     Float
+  severity      String       @default("medium")
+  enabled       Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model SavedView {
+  id            String       @id @default(cuid())
+  workspaceId   String
+  name          String
+  filtersJson   Json
+  createdAt     DateTime     @default(now())
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model AuditEvent {
+  id            String       @id @default(cuid())
+  workspaceId   String
+  userId        String
+  action        String
+  details       String?
+  createdAt     DateTime     @default(now())
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Shield, LayoutDashboard, Upload, Activity, Bell, Workflow, Settings } from "lucide-react";
+import { Shield, LayoutDashboard, Upload, Activity, Bell, Workflow, Settings, Users, DatabaseZap, WalletCards } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 const items = [
@@ -11,16 +11,13 @@ const items = [
   { label: "Flow Analytics", icon: Workflow, href: "flow-analytics" },
   { label: "Alerts", icon: Bell, href: "alerts" },
   { label: "Security", icon: Shield, href: "security" },
+  { label: "Team", icon: Users, href: "team" },
+  { label: "Sources", icon: DatabaseZap, href: "sources" },
+  { label: "Billing", icon: WalletCards, href: "billing" },
   { label: "Settings", icon: Settings, href: "settings" }
 ];
 
-export function Sidebar({
-  workspaceId,
-  slug
-}: {
-  workspaceId: string;
-  slug: string;
-}) {
+export function Sidebar({ workspaceId, slug }: { workspaceId: string; slug: string }) {
   const pathname = usePathname();
 
   return (
@@ -37,9 +34,9 @@ export function Sidebar({
 
       <div className="mt-8 rounded-[28px] border border-white/10 bg-gradient-to-br from-cyan-500/10 via-sky-500/5 to-violet-500/10 p-5">
         <div className="text-xs uppercase tracking-[0.22em] text-cyan-300/90">Mission Control</div>
-        <div className="mt-3 text-2xl font-semibold leading-tight">One SaaS workspace for logs, alerts, traces, uploads, and security.</div>
+        <div className="mt-3 text-2xl font-semibold leading-tight">One SaaS workspace for logs, team access, sources, billing, and security.</div>
         <div className="mt-3 text-sm leading-6 text-slate-400">
-          Built for teams managing multiple applications and environments with premium dashboards, fast investigations, and drag & drop ingestion.
+          Built for platform teams managing multiple apps and environments with premium dashboards, drag & drop ingestion, and production-ready workspace operations.
         </div>
       </div>
 
@@ -53,9 +50,7 @@ export function Sidebar({
               key={item.href}
               href={href}
               className={`group flex items-center justify-between rounded-2xl px-4 py-3 transition ${
-                isActive
-                  ? "bg-cyan-400/15 text-cyan-200 ring-1 ring-cyan-300/30"
-                  : "text-slate-300 hover:bg-white/8 hover:text-white"
+                isActive ? "bg-cyan-400/15 text-cyan-200 ring-1 ring-cyan-300/30" : "text-slate-300 hover:bg-white/8 hover:text-white"
               }`}
             >
               <span className="flex items-center gap-3">

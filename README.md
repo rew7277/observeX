@@ -1,20 +1,23 @@
-# ObserveX SaaS
+# ObserveX SaaS V2
 
 ObserveX is a production-ready SaaS starter for log intelligence and observability teams.
 
-## Included
-- Premium landing page
-- Login / create account flow
+## What V2 adds
+- Premium landing page, login, and create-account flow
 - Cookie-based JWT authentication
 - Workspace-aware SaaS URL structure
-- Drag & drop log upload
-- Parsing for plain text logs, JSON lines, and JSON arrays
-- Visual dashboards generated from uploaded log data
-- Alert overview, environment health, application distribution, latency insights
+- Drag & drop log upload with source label and environment tagging
+- Parsing for plain text logs, JSON lines, JSON arrays, and record-wrapper JSON payloads
+- Visual dashboards generated from uploaded logs
+- Team and role model
+- Workspace invites
+- API / S3 source configuration foundation
+- Billing-ready workspace plan model
+- Audit trail table for product actions
 - PostgreSQL + Prisma
 - Railway-friendly deployment
 
-## Tech Stack
+## Tech stack
 - Next.js 15
 - React 19
 - TypeScript
@@ -52,30 +55,38 @@ The build script already runs:
 prisma generate && prisma db push && next build
 ```
 
-## 4) Default flow
-- `/` → landing page
-- `/login` → sign in
-- `/create-account` → register
-- `/workspace/[workspaceId]/[slug]/overview` → dashboard
-- `/workspace/[workspaceId]/[slug]/upload` → upload logs
+## 4) Main routes
+- `/`
+- `/login`
+- `/create-account`
+- `/workspace/[workspaceId]/[slug]/overview`
+- `/workspace/[workspaceId]/[slug]/upload`
+- `/workspace/[workspaceId]/[slug]/live-logs`
+- `/workspace/[workspaceId]/[slug]/flow-analytics`
+- `/workspace/[workspaceId]/[slug]/alerts`
+- `/workspace/[workspaceId]/[slug]/security`
+- `/workspace/[workspaceId]/[slug]/team`
+- `/workspace/[workspaceId]/[slug]/sources`
+- `/workspace/[workspaceId]/[slug]/billing`
+- `/workspace/[workspaceId]/[slug]/settings`
 
-## 5) Supported sample log formats
-### Plain text
-```txt
-2026-04-22 11:20:42 [ERROR] [payment-engine] [Production] trace=TRC-98A21F latency=1821 message="Beneficiary validation failed"
-```
+## 5) Product direction already baked in
+- Multi-tenant workspace model
+- Member roles: owner, admin, developer, tester, manager, viewer
+- Billing foundation: starter, growth, enterprise
+- Hybrid ingestion direction: manual upload + source connectors
+- S3 archive metadata fields ready for extension
+- Audit event model for actions across the workspace
 
-### JSON line
-```json
-{"timestamp":"2026-04-22T11:20:42Z","level":"ERROR","application":"payment-engine","environment":"Production","traceId":"TRC-98A21F","latencyMs":1821,"message":"Beneficiary validation failed"}
-```
+## 6) Recommended next upgrades
+- Real invite acceptance flow by email token
+- Stripe checkout + billing portal
+- S3 object storage for raw logs
+- Background workers for source sync jobs
+- Full-text search and saved views
+- Alert rule execution engine
+- AI incident summaries and RCA generation
+- Per-workspace custom branding and subdomain routing
 
-### JSON array
-```json
-[
-  {"timestamp":"2026-04-22T11:20:42Z","level":"ERROR","application":"payment-engine","environment":"Production","traceId":"TRC-98A21F","latencyMs":1821,"message":"Beneficiary validation failed"}
-]
-```
-
-## 6) Notes
-This is a serious production starter, not a fake static dashboard. Charts and summaries are generated from actual uploaded logs.
+## 7) Notes
+This is a serious production starter, not a fake static dashboard. Charts and summaries are generated from actual uploaded logs, while the team/source/billing layers are implemented as real SaaS scaffolding you can keep extending.

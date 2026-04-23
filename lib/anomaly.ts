@@ -1,38 +1,161 @@
 import { db } from "@/lib/db";
 
-export async function detectWorkspaceAnomalies(workspaceId: string) {
-  const since = new Date(Date.now() - 1000 * 60 * 60 * 24 * 7);
+// ---------------------------------------------------------------------------
+// Threshold configuration — override per plan tier if needed
+// ---------------------------------------------------------------------------
+
+export type AnomalyThresholds = {
+  errorRateHighPct: number;       // default 15 — fire "high" severity
+  errorRateCriticalPct: number;   // default 30 — fire "critical" severity
+  avgLatencyMediumMs: number;     // default 800
+  avgLatencyHighMs: number;       // default 1500
+  piiHighCount: number;           // default 10
+  fatalCriticalCount: number;     // default 5
+  noisySignatureMin: number;      // default 5 occurrences to be "noisy"
+  lookbackDays: number;           // default 7
+  maxEvents: number;              // default 5000
+};
+
+export const DEFAULT_THRESHOLDS: AnomalyThresholds = {
+  errorRateHighPct: 15,
+  errorRateCriticalPct: 30,
+  avgLatencyMediumMs: 800,
+  avgLatencyHighMs: 1500,
+  piiHighCount: 10,
+  fatalCriticalCount: 5,
+  noisySignatureMin: 5,
+  lookbackDays: 7,
+  maxEvents: 5000,
+};
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type AnomalyItem = {
+  title: string;
+  severity: "low" | "medium" | "high" | "critical";
+  detail: string;
+  metric: string;
+};
+
+export type AnomalyReport = {
+  anomalies: AnomalyItem[];
+  noisySignatures: Array<{ signature: string; count: number }>;
+  summary: {
+    totalEvents: number;
+    errorRate: number;
+    avgLatency: number;
+    p95Latency: number;
+    piiEvents: number;
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Percentile helper (local — avoids importing from log-parser)
+// ---------------------------------------------------------------------------
+
+function percentile(values: number[], p: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+
+// ---------------------------------------------------------------------------
+// Main detection function
+// ---------------------------------------------------------------------------
+
+export async function detectWorkspaceAnomalies(
+  workspaceId: string,
+  thresholds: Partial<AnomalyThresholds> = {}
+): Promise<AnomalyReport> {
+  const cfg: AnomalyThresholds = { ...DEFAULT_THRESHOLDS, ...thresholds };
+
+  const since = new Date(Date.now() - 1000 * 60 * 60 * 24 * cfg.lookbackDays);
+
   const events = await db.logEvent.findMany({
     where: { workspaceId, timestamp: { gte: since } },
+    select: {
+      level: true,
+      application: true,
+      signature: true,
+      containsPii: true,
+      latencyMs: true,
+    },
     orderBy: { timestamp: "desc" },
-    take: 5000,
+    take: cfg.maxEvents,
   });
 
   const total = events.length || 1;
-  const errorCount = events.filter((event) => /error|fatal/i.test(event.level)).length;
-  const piiEvents = events.filter((event) => event.containsPii).length;
-  const avgLatency = Math.round(events.reduce((sum, event) => sum + (event.latencyMs || 0), 0) / total);
+  const errorCount = events.filter((e) => /error|fatal/i.test(e.level)).length;
+  const piiEvents = events.filter((e) => e.containsPii).length;
+
+  // Real percentile calculation — NOT the "avgLatency * 1.4" approximation
+  const latencies = events.map((e) => e.latencyMs ?? 0).filter((n) => n > 0);
+  const avgLatency = latencies.length
+    ? Math.round(latencies.reduce((s, v) => s + v, 0) / latencies.length)
+    : 0;
+  const p95Latency = percentile(latencies, 95);
+
   const fatalGroups = new Map<string, number>();
   const signatureGroups = new Map<string, number>();
 
   for (const event of events) {
-    signatureGroups.set(event.signature, (signatureGroups.get(event.signature) || 0) + 1);
-    if (/fatal/i.test(event.level)) fatalGroups.set(event.application, (fatalGroups.get(event.application) || 0) + 1);
+    signatureGroups.set(event.signature, (signatureGroups.get(event.signature) ?? 0) + 1);
+    if (/fatal/i.test(event.level)) {
+      fatalGroups.set(event.application, (fatalGroups.get(event.application) ?? 0) + 1);
+    }
   }
 
-  const anomalies = [] as Array<{ title: string; severity: "low" | "medium" | "high" | "critical"; detail: string; metric: string }>;
+  const anomalies: AnomalyItem[] = [];
 
+  // --- Error rate ---
   const errorRate = Math.round((errorCount / total) * 1000) / 10;
-  if (errorRate >= 15) anomalies.push({ title: "Error spike detected", severity: errorRate >= 30 ? "critical" : "high", detail: `${errorCount} errors in the recent event window`, metric: `${errorRate}% error rate` });
-  if (avgLatency >= 800) anomalies.push({ title: "High latency trend", severity: avgLatency >= 1500 ? "high" : "medium", detail: `Average response latency is elevated`, metric: `${avgLatency} ms` });
-  if (piiEvents > 0) anomalies.push({ title: "Sensitive data exposure", severity: piiEvents >= 10 ? "high" : "medium", detail: `Messages contain masked PII or secret patterns`, metric: `${piiEvents} flagged events` });
-
-  for (const [application, count] of fatalGroups.entries()) {
-    if (count > 0) anomalies.push({ title: `Fatal events in ${application}`, severity: count >= 5 ? "critical" : "high", detail: `Application produced fatal-level events`, metric: `${count} fatal entries` });
+  if (errorRate >= cfg.errorRateHighPct) {
+    anomalies.push({
+      title: "Error spike detected",
+      severity: errorRate >= cfg.errorRateCriticalPct ? "critical" : "high",
+      detail: `${errorCount} errors in the last ${cfg.lookbackDays}d window`,
+      metric: `${errorRate}% error rate`,
+    });
   }
 
+  // --- Latency ---
+  if (avgLatency >= cfg.avgLatencyMediumMs) {
+    anomalies.push({
+      title: "High latency trend",
+      severity: avgLatency >= cfg.avgLatencyHighMs ? "high" : "medium",
+      detail: `Average response latency is elevated (P95: ${p95Latency} ms)`,
+      metric: `avg ${avgLatency} ms`,
+    });
+  }
+
+  // --- PII exposure ---
+  if (piiEvents > 0) {
+    anomalies.push({
+      title: "Sensitive data exposure",
+      severity: piiEvents >= cfg.piiHighCount ? "high" : "medium",
+      detail: `Messages contain masked PII or secret patterns`,
+      metric: `${piiEvents} flagged events`,
+    });
+  }
+
+  // --- Fatal events per application ---
+  for (const [application, count] of fatalGroups.entries()) {
+    if (count > 0) {
+      anomalies.push({
+        title: `Fatal events in ${application}`,
+        severity: count >= cfg.fatalCriticalCount ? "critical" : "high",
+        detail: `Application produced fatal-level events`,
+        metric: `${count} fatal entries`,
+      });
+    }
+  }
+
+  // --- Noisy (repeated) error signatures ---
   const noisySignatures = Array.from(signatureGroups.entries())
-    .filter(([, count]) => count >= 5)
+    .filter(([, count]) => count >= cfg.noisySignatureMin)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([signature, count]) => ({ signature, count }));
@@ -44,6 +167,7 @@ export async function detectWorkspaceAnomalies(workspaceId: string) {
       totalEvents: events.length,
       errorRate,
       avgLatency,
+      p95Latency,   // ✅ real value, not estimated
       piiEvents,
     },
   };

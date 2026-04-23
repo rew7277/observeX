@@ -7,6 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
 enum MembershipRole {
   owner
   admin
@@ -54,6 +58,16 @@ enum AuthEventType {
   password_reset_requested
 }
 
+enum AlertChannelType {
+  webhook
+  email
+  slack
+}
+
+// ---------------------------------------------------------------------------
+// Core models
+// ---------------------------------------------------------------------------
+
 model User {
   id              String          @id @default(cuid())
   name            String
@@ -62,6 +76,7 @@ model User {
   emailVerifiedAt DateTime?
   sessionVersion  Int             @default(1)
   mfaEnabled      Boolean         @default(false)
+  mfaSecret       String?         // TOTP secret (encrypted at rest)
   createdAt       DateTime        @default(now())
   memberships     Membership[]
   ownedWorkspaces Workspace[]     @relation("WorkspaceOwner")
@@ -97,6 +112,7 @@ model Workspace {
   invites               Invite[]
   apiSources            ApiSource[]
   alertRules            AlertRule[]
+  alertChannels         AlertChannel[]
   savedViews            SavedView[]
   savedSearches         SavedSearch[]
   sourceRuns            SourceRun[]
@@ -134,8 +150,13 @@ model Upload {
   processedCount  Int          @default(0)
   maskedCount     Int          @default(0)
   droppedCount    Int          @default(0)
+  // ✅ rawText is kept for the async worker to parse.
+  //    For large files consider setting logStorageMode="s3" and storing
+  //    an S3 key here instead of the full text.
   rawText         String
-  parsedJson      Json
+  rawTextSizeBytes Int         @default(0)  // track size without loading the column
+  // parsedJson removed — LogEvent rows are the source of truth.
+  // summaryJson is a lightweight metrics snapshot only.
   summaryJson     Json?
   ingestionError  String?
   fingerprint     String?
@@ -168,12 +189,24 @@ model LogEvent {
   workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   upload          Upload?   @relation(fields: [uploadId], references: [id], onDelete: SetNull)
 
+  // NOTE: After running prisma db push, execute the following raw SQL to enable
+  // full-text search (Prisma does not support generated columns natively):
+  //
+  //   ALTER TABLE "LogEvent"
+  //     ADD COLUMN IF NOT EXISTS search_vector tsvector
+  //     GENERATED ALWAYS AS (
+  //       to_tsvector('english', message || ' ' || application || ' ' || "traceId")
+  //     ) STORED;
+  //   CREATE INDEX IF NOT EXISTS log_event_search_vector_idx
+  //     ON "LogEvent" USING GIN(search_vector);
+
   @@index([workspaceId, timestamp(sort: Desc)])
   @@index([workspaceId, application, timestamp(sort: Desc)])
   @@index([workspaceId, environment, timestamp(sort: Desc)])
   @@index([workspaceId, level, timestamp(sort: Desc)])
   @@index([workspaceId, traceId])
   @@index([workspaceId, containsPii])
+  @@index([workspaceId, signature])
 }
 
 model Invite {
@@ -230,16 +263,47 @@ model SourceRun {
 }
 
 model AlertRule {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  name            String
+  metric          String
+  operator        String
+  threshold       Float
+  severity        String          @default("medium")
+  enabled         Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deliveries      AlertDelivery[]
+}
+
+// ✅ New: AlertChannel — where alert notifications are sent
+model AlertChannel {
+  id          String           @id @default(cuid())
+  workspaceId String
+  name        String
+  type        AlertChannelType
+  destination String           // URL, email address, or Slack webhook URL
+  enabled     Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deliveries  AlertDelivery[]
+
+  @@index([workspaceId])
+}
+
+// ✅ New: AlertDelivery — audit trail of every notification attempt
+model AlertDelivery {
   id            String       @id @default(cuid())
-  workspaceId   String
-  name          String
-  metric        String
-  operator      String
-  threshold     Float
-  severity      String       @default("medium")
-  enabled       Boolean      @default(true)
-  createdAt     DateTime     @default(now())
-  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  alertRuleId   String
+  channelId     String
+  triggeredAt   DateTime     @default(now())
+  success       Boolean      @default(false)
+  errorMessage  String?
+  payloadJson   Json?
+  alertRule     AlertRule    @relation(fields: [alertRuleId], references: [id], onDelete: Cascade)
+  channel       AlertChannel @relation(fields: [channelId],   references: [id], onDelete: Cascade)
+
+  @@index([alertRuleId, triggeredAt(sort: Desc)])
 }
 
 model SavedView {
@@ -270,6 +334,8 @@ model ApiKey {
   lastUsedAt    DateTime?
   createdAt     DateTime     @default(now())
   workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, keyPrefix])
 }
 
 model AuditEvent {
@@ -298,4 +364,6 @@ model AuthEvent {
 
   @@index([email, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
+  // ✅ Index for brute-force queries (email + success + createdAt)
+  @@index([email, success, createdAt(sort: Desc)])
 }

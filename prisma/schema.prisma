@@ -148,6 +148,7 @@ model Upload {
   summaryJson     Json?
   ingestionError  String?
   fingerprint     String?
+  retryCount      Int          @default(0)   // FIX #18: dead-letter queue
   createdAt       DateTime     @default(now())
   completedAt     DateTime?
   workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -320,6 +321,7 @@ model AuditEvent {
   userId      String
   action      String
   details     String?
+  chainHash   String?             // FIX #7: tamper-evident hash chain
   createdAt   DateTime  @default(now())
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)

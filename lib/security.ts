@@ -11,14 +11,31 @@ export function requireEnv(name: string, options?: { allowInDev?: boolean; fallb
   throw new Error(`Missing required environment variable: ${name}`);
 }
 
-export function getJwtSecret() {
+export function getJwtSecret(): Uint8Array {
   const secret = requireEnv("JWT_SECRET");
   if (secret.length < MIN_SECRET_LEN) throw new Error("JWT_SECRET must be at least 32 characters.");
   return new TextEncoder().encode(secret);
 }
 
+// FIX #6 — Grace-period secret for JWT rotation (set JWT_SECRET_OLD during rotation window)
+export function getJwtSecretOld(): Uint8Array | null {
+  const old = process.env.JWT_SECRET_OLD;
+  if (!old || old.length < MIN_SECRET_LEN) return null;
+  return new TextEncoder().encode(old);
+}
+
 export function hashValue(value: string) {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+// FIX #7 — Audit log hash chaining: compute a SHA-256 HMAC chain
+// so that any deleted or modified row breaks the chain and is detectable.
+export function computeAuditHash(previousHash: string, eventData: {
+  workspaceId: string; userId: string; action: string; details?: string | null; createdAt: Date;
+}): string {
+  const payload = [previousHash, eventData.workspaceId, eventData.userId, eventData.action, eventData.details ?? "", eventData.createdAt.toISOString()].join("|");
+  const pepper  = process.env.AUDIT_HASH_PEPPER || "observex-audit-v1";
+  return crypto.createHmac("sha256", pepper).update(payload).digest("hex");
 }
 
 /** Constant-time comparison to prevent timing attacks on API key checks */
@@ -49,6 +66,21 @@ export function isSafeHttpUrl(url: string) {
     const parsed = new URL(url);
     return ["https:", "http:"].includes(parsed.protocol);
   } catch { return false; }
+}
+
+// FIX #9 — Content validation: check that uploaded bytes are valid UTF-8 text,
+// not binary data masquerading as a log file.
+export function validateTextContent(content: string): { ok: boolean; reason?: string } {
+  if (!content || content.trim().length === 0) {
+    return { ok: false, reason: "File appears to be empty." };
+  }
+  // Reject if more than 5% of chars are non-printable (likely binary)
+  const nonPrintable = (content.match(/[\x00-\x08\x0E-\x1F\x7F]/g) || []).length;
+  const ratio = nonPrintable / content.length;
+  if (ratio > 0.05) {
+    return { ok: false, reason: "File appears to be binary, not a text log file." };
+  }
+  return { ok: true };
 }
 
 const PII_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
@@ -105,7 +137,7 @@ export function buildSignature(message: string): string {
     .replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-const BRUTE_FORCE_WINDOW_MS = 15 * 60 * 1000;
+const BRUTE_FORCE_WINDOW_MS   = 15 * 60 * 1000;
 const BRUTE_FORCE_MAX_ATTEMPTS = 10;
 
 export async function checkBruteForce(email: string): Promise<boolean> {

@@ -4,9 +4,10 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "numReplicas": 1,
-    "startCommand": "npx prisma db push && npm run start",
+    "startCommand": "npm run db:migrate && next start",
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "restartPolicyMaxRetries": 3
   }
 }

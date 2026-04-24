@@ -4,7 +4,10 @@ import { notFound } from "next/navigation";
 
 const MAX_OVERVIEW_RECORDS = 15000;
 
-function toLogRecord(event: any): LogRecord {
+function toLogRecord(event: {
+  timestamp: Date; level: string; application: string; environment: string;
+  traceId: string; latencyMs: number; message: string; payloadJson: unknown;
+}): LogRecord {
   return {
     timestamp: event.timestamp.toISOString(),
     level: event.level,
@@ -13,7 +16,7 @@ function toLogRecord(event: any): LogRecord {
     traceId: event.traceId,
     latencyMs: event.latencyMs,
     message: event.message,
-    payloadJson: (event.payloadJson as Record<string, unknown> | null) ?? null
+    payloadJson: (event.payloadJson as Record<string, unknown> | null) ?? null,
   };
 }
 
@@ -21,71 +24,48 @@ export async function getWorkspaceBasic(workspaceId: string, slug: string, userI
   const workspace = await db.workspace.findUnique({
     where: { id: workspaceId },
     select: {
-      id: true,
-      name: true,
-      slug: true,
-      planTier: true,
-      memberships: {
-        where: { userId },
-        select: { role: true },
-        take: 1,
-      },
+      id: true, name: true, slug: true, planTier: true,
+      memberships: { where: { userId }, select: { role: true }, take: 1 },
     },
   });
-
   if (!workspace || workspace.slug !== slug) notFound();
   const membership = workspace.memberships[0];
   if (!membership) notFound();
-
   return { workspace, membership };
 }
 
 export async function getWorkspaceContext(workspaceId: string, slug: string, userId: string) {
-  const workspace = await db.workspace.findUnique({
-    where: { id: workspaceId },
-    include: {
-      memberships: { include: { user: true }, orderBy: { createdAt: "asc" } },
-      invites: { orderBy: { createdAt: "desc" }, take: 10 },
-      apiSources: { orderBy: { createdAt: "desc" }, take: 10 },
-      sourceRuns: { orderBy: { startedAt: "desc" }, take: 10, include: { apiSource: true } },
-      alertRules: { orderBy: { createdAt: "desc" }, take: 10 },
-      uploads: { orderBy: { createdAt: "desc" }, take: 20 },
-      auditEvents: { include: { user: true }, orderBy: { createdAt: "desc" }, take: 20 },
-      savedSearches: { orderBy: { createdAt: "desc" }, take: 10 }
-    }
-  });
+  const [workspace, eventRows, piiSummary] = await Promise.all([
+    db.workspace.findUnique({
+      where: { id: workspaceId },
+      include: {
+        memberships: { include: { user: true }, orderBy: { createdAt: "asc" } },
+        invites: { orderBy: { createdAt: "desc" }, take: 10 },
+        apiSources: { orderBy: { createdAt: "desc" }, take: 10 },
+        sourceRuns: { orderBy: { startedAt: "desc" }, take: 10, include: { apiSource: true } },
+        alertRules: { orderBy: { createdAt: "desc" }, take: 10 },
+        alertChannels: { orderBy: { createdAt: "desc" }, take: 10 },
+        uploads: { orderBy: { createdAt: "desc" }, take: 20 },
+        auditEvents: { include: { user: true }, orderBy: { createdAt: "desc" }, take: 20 },
+        savedSearches: { orderBy: { createdAt: "desc" }, take: 10 },
+      },
+    }),
+    db.logEvent.findMany({
+      where: { workspaceId },
+      orderBy: { timestamp: "desc" },
+      take: MAX_OVERVIEW_RECORDS,
+      select: { timestamp: true, level: true, application: true, environment: true, traceId: true, latencyMs: true, message: true, payloadJson: true },
+    }),
+    db.logEvent.groupBy({ by: ["containsPii"], where: { workspaceId }, _count: { _all: true } }).catch(() => []),
+  ]);
 
   if (!workspace || workspace.slug !== slug) notFound();
-
-  const membership = workspace.memberships.find((item) => item.userId === userId);
+  const membership = workspace.memberships.find((m) => m.userId === userId);
   if (!membership) notFound();
 
-  const eventRows = await db.logEvent.findMany({
-    where: { workspaceId },
-    orderBy: { timestamp: "desc" },
-    take: MAX_OVERVIEW_RECORDS
-  });
-
-  let records = eventRows.map(toLogRecord);
-
-  if (!records.length) {
-    let total = 0;
-    records = [];
-    for (const upload of workspace.uploads) {
-      const rows = ((upload.parsedJson as any[]) || []).slice(0, Math.max(0, MAX_OVERVIEW_RECORDS - total));
-      records.push(...rows);
-      total += rows.length;
-      if (total >= MAX_OVERVIEW_RECORDS) break;
-    }
-  }
-
+  // ✅ LogEvent is always the source of truth — no parsedJson fallback
+  const records = eventRows.map(toLogRecord);
   const metrics = buildMetrics(records);
-
-  const piiSummary = await db.logEvent.groupBy({
-    by: ["containsPii"],
-    where: { workspaceId },
-    _count: { _all: true }
-  }).catch(() => []);
 
   return {
     workspace,
@@ -93,8 +73,8 @@ export async function getWorkspaceContext(workspaceId: string, slug: string, use
     records,
     metrics,
     securityStats: {
-      piiEvents: piiSummary.find((item) => item.containsPii)?._count._all || 0,
-      cleanEvents: piiSummary.find((item) => !item.containsPii)?._count._all || 0
-    }
+      piiEvents: piiSummary.find((i) => i.containsPii)?._count._all ?? 0,
+      cleanEvents: piiSummary.find((i) => !i.containsPii)?._count._all ?? 0,
+    },
   };
 }

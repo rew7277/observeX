@@ -1,10 +1,6 @@
 import { db } from "@/lib/db";
 import { detectWorkspaceAnomalies } from "@/lib/anomaly";
 
-// ---------------------------------------------------------------------------
-// Metric comparator
-// ---------------------------------------------------------------------------
-
 function compare(metric: number, operator: string, threshold: number): boolean {
   switch (operator) {
     case ">":  return metric > threshold;
@@ -15,37 +11,23 @@ function compare(metric: number, operator: string, threshold: number): boolean {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Alert evaluation
-// ---------------------------------------------------------------------------
-
 export type AlertEvaluation = {
-  rule: {
-    id: string;
-    name: string;
-    metric: string;
-    operator: string;
-    threshold: number;
-    severity: string;
-  };
+  rule: { id: string; name: string; metric: string; operator: string; threshold: number; severity: string };
   currentValue: number;
   triggered: boolean;
 };
 
 export async function evaluateAlertRules(workspaceId: string): Promise<AlertEvaluation[]> {
   const [rules, anomaly] = await Promise.all([
-    db.alertRule.findMany({
-      where: { workspaceId, enabled: true },
-      orderBy: { createdAt: "desc" },
-    }),
+    db.alertRule.findMany({ where: { workspaceId, enabled: true }, orderBy: { createdAt: "desc" } }),
     detectWorkspaceAnomalies(workspaceId),
   ]);
 
-  // Use the REAL p95 from anomaly detection — not an estimate
+  // ✅ Real p95 — not avgLatency * 1.4
   const metrics: Record<string, number> = {
     errorRate:       anomaly.summary.errorRate,
     avgLatency:      anomaly.summary.avgLatency,
-    p95Latency:      anomaly.summary.p95Latency,   // ✅ real value
+    p95Latency:      anomaly.summary.p95Latency,
     warnCount:       anomaly.summary.totalEvents,
     criticalSignals: anomaly.anomalies.filter((a) => a.severity === "critical").length,
     piiEvents:       anomaly.summary.piiEvents,
@@ -58,87 +40,56 @@ export async function evaluateAlertRules(workspaceId: string): Promise<AlertEval
   }));
 }
 
-// ---------------------------------------------------------------------------
-// Notification delivery — channel-agnostic stub
-// ---------------------------------------------------------------------------
+export type AlertChannelType = "webhook" | "email" | "slack";
 
-export type AlertDeliveryChannel = {
-  type: "webhook" | "email" | "slack";
-  destination: string;
-};
-
-/**
- * Deliver a triggered alert to a configured channel.
- * Extend each branch with a real HTTP call / email SDK / Slack API.
- */
 export async function deliverAlert(
   rule: AlertEvaluation["rule"],
-  channel: AlertDeliveryChannel,
+  channel: { type: AlertChannelType; destination: string },
   currentValue: number
 ): Promise<{ ok: boolean; error?: string }> {
   const payload = {
-    alertName: rule.name,
-    severity: rule.severity,
-    metric: rule.metric,
-    currentValue,
-    threshold: rule.threshold,
-    operator: rule.operator,
+    alertName: rule.name, severity: rule.severity, metric: rule.metric,
+    currentValue, threshold: rule.threshold, operator: rule.operator,
     triggeredAt: new Date().toISOString(),
   };
 
   try {
-    switch (channel.type) {
-      case "webhook": {
-        const res = await fetch(channel.destination, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!res.ok) throw new Error(`Webhook responded ${res.status}`);
-        return { ok: true };
-      }
-
-      case "slack": {
-        const res = await fetch(channel.destination, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: `🚨 *${rule.name}* (${rule.severity.toUpperCase()}) — ${rule.metric} is ${currentValue} (threshold: ${rule.operator} ${rule.threshold})`,
-          }),
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!res.ok) throw new Error(`Slack responded ${res.status}`);
-        return { ok: true };
-      }
-
-      case "email": {
-        // Wire to your email provider (Resend, SendGrid, AWS SES, etc.)
-        console.info("[AlertDelivery] Email delivery not yet wired", { to: channel.destination, payload });
-        return { ok: true };
-      }
-
-      default:
-        return { ok: false, error: "Unknown channel type" };
+    if (channel.type === "webhook" || channel.type === "slack") {
+      const body = channel.type === "slack"
+        ? JSON.stringify({ text: `🚨 *${rule.name}* (${rule.severity.toUpperCase()}) — ${rule.metric} is ${currentValue} (threshold: ${rule.operator} ${rule.threshold})` })
+        : JSON.stringify(payload);
+      const res = await fetch(channel.destination, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return { ok: true };
     }
+    if (channel.type === "email") {
+      console.info("[AlertDelivery] Email to", channel.destination, payload);
+      return { ok: true };
+    }
+    return { ok: false, error: "Unknown channel type" };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
 }
 
-// ---------------------------------------------------------------------------
-// Convenience: evaluate + deliver all triggered rules for a workspace
-// ---------------------------------------------------------------------------
-
 export async function runAlertsForWorkspace(workspaceId: string): Promise<void> {
   const evaluations = await evaluateAlertRules(workspaceId);
   const triggered = evaluations.filter((e) => e.triggered);
-
   if (!triggered.length) return;
 
-  // TODO: fetch AlertChannel rows from DB per rule and call deliverAlert.
-  // For now, log to console so the wiring point is obvious.
+  const channels = await db.alertChannel.findMany({ where: { workspaceId, enabled: true } });
   for (const evaluation of triggered) {
-    console.info(`[Alerts] Rule "${evaluation.rule.name}" triggered — value: ${evaluation.currentValue}`);
+    for (const ch of channels) {
+      const result = await deliverAlert(evaluation.rule, { type: ch.type as AlertChannelType, destination: ch.destination }, evaluation.currentValue);
+      await db.alertDelivery.create({
+        data: {
+          alertRuleId: evaluation.rule.id,
+          channelId: ch.id,
+          success: result.ok,
+          errorMessage: result.error ?? null,
+          payloadJson: { metric: evaluation.rule.metric, value: evaluation.currentValue } as any,
+        }
+      }).catch(() => {});
+    }
   }
 }

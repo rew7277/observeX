@@ -7,10 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------------------------------------------------------------------------
-// Enums
-// ---------------------------------------------------------------------------
-
 enum MembershipRole {
   owner
   admin
@@ -64,10 +60,6 @@ enum AlertChannelType {
   slack
 }
 
-// ---------------------------------------------------------------------------
-// Core models
-// ---------------------------------------------------------------------------
-
 model User {
   id              String          @id @default(cuid())
   name            String
@@ -76,7 +68,7 @@ model User {
   emailVerifiedAt DateTime?
   sessionVersion  Int             @default(1)
   mfaEnabled      Boolean         @default(false)
-  mfaSecret       String?         // TOTP secret (encrypted at rest)
+  mfaSecret       String?
   createdAt       DateTime        @default(now())
   memberships     Membership[]
   ownedWorkspaces Workspace[]     @relation("WorkspaceOwner")
@@ -94,6 +86,8 @@ model Workspace {
   ownerId               String
   planTier              PlanTier         @default(starter)
   billingEmail          String?
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
   domain                String?
   ingestionMode         String           @default("manual")
   retentionDays         Int              @default(30)
@@ -150,13 +144,7 @@ model Upload {
   processedCount  Int          @default(0)
   maskedCount     Int          @default(0)
   droppedCount    Int          @default(0)
-  // ✅ rawText is kept for the async worker to parse.
-  //    For large files consider setting logStorageMode="s3" and storing
-  //    an S3 key here instead of the full text.
   rawText         String
-  rawTextSizeBytes Int         @default(0)  // track size without loading the column
-  // parsedJson removed — LogEvent rows are the source of truth.
-  // summaryJson is a lightweight metrics snapshot only.
   summaryJson     Json?
   ingestionError  String?
   fingerprint     String?
@@ -171,34 +159,23 @@ model Upload {
 }
 
 model LogEvent {
-  id              String    @id @default(cuid())
-  workspaceId     String
-  uploadId        String?
-  timestamp       DateTime
-  level           String
-  application     String
-  environment     String
-  traceId         String
-  latencyMs       Int       @default(0)
-  message         String
-  signature       String
-  containsPii     Boolean   @default(false)
-  piiTypes        String[]
-  payloadJson     Json?
-  createdAt       DateTime  @default(now())
-  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  upload          Upload?   @relation(fields: [uploadId], references: [id], onDelete: SetNull)
-
-  // NOTE: After running prisma db push, execute the following raw SQL to enable
-  // full-text search (Prisma does not support generated columns natively):
-  //
-  //   ALTER TABLE "LogEvent"
-  //     ADD COLUMN IF NOT EXISTS search_vector tsvector
-  //     GENERATED ALWAYS AS (
-  //       to_tsvector('english', message || ' ' || application || ' ' || "traceId")
-  //     ) STORED;
-  //   CREATE INDEX IF NOT EXISTS log_event_search_vector_idx
-  //     ON "LogEvent" USING GIN(search_vector);
+  id          String    @id @default(cuid())
+  workspaceId String
+  uploadId    String?
+  timestamp   DateTime
+  level       String
+  application String
+  environment String
+  traceId     String
+  latencyMs   Int       @default(0)
+  message     String
+  signature   String
+  containsPii Boolean   @default(false)
+  piiTypes    String[]
+  payloadJson Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  upload      Upload?   @relation(fields: [uploadId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, timestamp(sort: Desc)])
   @@index([workspaceId, application, timestamp(sort: Desc)])
@@ -223,66 +200,66 @@ model Invite {
   createdBy   User           @relation("InviteCreator", fields: [createdById], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, status])
+  @@index([token])
 }
 
 model ApiSource {
-  id              String       @id @default(cuid())
-  workspaceId     String
-  name            String
-  type            SourceType   @default(api)
-  status          SourceStatus @default(active)
-  endpointUrl     String?
-  bucketName      String?
-  region          String?
-  prefix          String?
-  schedule        String?
-  authType        String?      @default("none")
-  secretRef       String?
-  lastTestedAt    DateTime?
-  lastSyncAt      DateTime?
-  lastError       String?
-  createdAt       DateTime     @default(now())
-  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  sourceRuns      SourceRun[]
+  id           String       @id @default(cuid())
+  workspaceId  String
+  name         String
+  type         SourceType   @default(api)
+  status       SourceStatus @default(active)
+  endpointUrl  String?
+  bucketName   String?
+  region       String?
+  prefix       String?
+  schedule     String?
+  authType     String?      @default("none")
+  secretRef    String?
+  lastTestedAt DateTime?
+  lastSyncAt   DateTime?
+  lastError    String?
+  createdAt    DateTime     @default(now())
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceRuns   SourceRun[]
 }
 
 model SourceRun {
-  id              String       @id @default(cuid())
-  workspaceId     String
-  apiSourceId     String?
-  status          SourceStatus @default(active)
-  recordsFetched  Int          @default(0)
-  recordsStored   Int          @default(0)
-  errorMessage    String?
-  startedAt       DateTime     @default(now())
-  completedAt     DateTime?
-  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  apiSource       ApiSource?   @relation(fields: [apiSourceId], references: [id], onDelete: SetNull)
+  id             String       @id @default(cuid())
+  workspaceId    String
+  apiSourceId    String?
+  status         SourceStatus @default(active)
+  recordsFetched Int          @default(0)
+  recordsStored  Int          @default(0)
+  errorMessage   String?
+  startedAt      DateTime     @default(now())
+  completedAt    DateTime?
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  apiSource      ApiSource?   @relation(fields: [apiSourceId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, startedAt(sort: Desc)])
 }
 
 model AlertRule {
-  id              String          @id @default(cuid())
-  workspaceId     String
-  name            String
-  metric          String
-  operator        String
-  threshold       Float
-  severity        String          @default("medium")
-  enabled         Boolean         @default(true)
-  createdAt       DateTime        @default(now())
-  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  deliveries      AlertDelivery[]
+  id          String          @id @default(cuid())
+  workspaceId String
+  name        String
+  metric      String
+  operator    String
+  threshold   Float
+  severity    String          @default("medium")
+  enabled     Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deliveries  AlertDelivery[]
 }
 
-// ✅ New: AlertChannel — where alert notifications are sent
 model AlertChannel {
   id          String           @id @default(cuid())
   workspaceId String
   name        String
   type        AlertChannelType
-  destination String           // URL, email address, or Slack webhook URL
+  destination String
   enabled     Boolean          @default(true)
   createdAt   DateTime         @default(now())
   workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -291,79 +268,77 @@ model AlertChannel {
   @@index([workspaceId])
 }
 
-// ✅ New: AlertDelivery — audit trail of every notification attempt
 model AlertDelivery {
-  id            String       @id @default(cuid())
-  alertRuleId   String
-  channelId     String
-  triggeredAt   DateTime     @default(now())
-  success       Boolean      @default(false)
-  errorMessage  String?
-  payloadJson   Json?
-  alertRule     AlertRule    @relation(fields: [alertRuleId], references: [id], onDelete: Cascade)
-  channel       AlertChannel @relation(fields: [channelId],   references: [id], onDelete: Cascade)
+  id           String       @id @default(cuid())
+  alertRuleId  String
+  channelId    String
+  triggeredAt  DateTime     @default(now())
+  success      Boolean      @default(false)
+  errorMessage String?
+  payloadJson  Json?
+  alertRule    AlertRule    @relation(fields: [alertRuleId], references: [id], onDelete: Cascade)
+  channel      AlertChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
   @@index([alertRuleId, triggeredAt(sort: Desc)])
 }
 
 model SavedView {
-  id            String       @id @default(cuid())
-  workspaceId   String
-  name          String
-  filtersJson   Json
-  createdAt     DateTime     @default(now())
-  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  filtersJson Json
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model SavedSearch {
-  id            String       @id @default(cuid())
-  workspaceId   String
-  name          String
-  query         String
-  filtersJson   Json?
-  createdAt     DateTime     @default(now())
-  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  query       String
+  filtersJson Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model ApiKey {
-  id            String       @id @default(cuid())
-  workspaceId   String
-  name          String
-  keyPrefix     String
-  secretHash    String
-  lastUsedAt    DateTime?
-  createdAt     DateTime     @default(now())
-  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  keyPrefix   String
+  secretHash  String
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, keyPrefix])
 }
 
 model AuditEvent {
-  id            String       @id @default(cuid())
-  workspaceId   String
-  userId        String
-  action        String
-  details       String?
-  createdAt     DateTime     @default(now())
-  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  action      String
+  details     String?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt(sort: Desc)])
 }
 
 model AuthEvent {
-  id            String        @id @default(cuid())
-  email         String
-  userId        String?
-  type          AuthEventType
-  ipAddress     String?
-  userAgent     String?
-  success       Boolean       @default(false)
-  createdAt     DateTime      @default(now())
-  user          User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  id        String        @id @default(cuid())
+  email     String
+  userId    String?
+  type      AuthEventType
+  ipAddress String?
+  userAgent String?
+  success   Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([email, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
-  // ✅ Index for brute-force queries (email + success + createdAt)
   @@index([email, success, createdAt(sort: Desc)])
 }

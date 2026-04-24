@@ -19,8 +19,8 @@ export type AggregatedMetrics = {
   errorRate: number;
   health: string;             // "Healthy" | "Watch" | "Critical"
   // ── Grouped datasets ─────────────────────────────────────────────────────────
-  applications: { name: string; count: number }[];
-  environments: { name: string; count: number }[];
+  applications: { name: string; value: number }[];
+  environments: { name: string; value: number }[];
   slowestApplications: { name: string; avgLatency: number; count: number }[];
   busiestTraces: { traceId: string; count: number }[];
   // ── Signals ──────────────────────────────────────────────────────────────────
@@ -259,8 +259,8 @@ export async function getWorkspaceContext(workspaceId: string, slug: string, use
     p95Latency:  p95LatencyMs,
     errorRate,
     health,
-    applications: appCounts.map((a) => ({ name: a.application, count: a._count._all })),
-    environments: envCounts.map((e) => ({ name: e.environment, count: e._count._all })),
+    applications: appCounts.map((a) => ({ name: a.application, value: a._count._all })),
+    environments: envCounts.map((e) => ({ name: e.environment, value: e._count._all })),
     slowestApplications,
     busiestTraces,
     anomalySignals,

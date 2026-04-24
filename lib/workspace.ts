@@ -27,7 +27,7 @@ export type AggregatedMetrics = {
   anomalySignals: { label: string; value: string }[];
   topSignatures: { signature: string; count: number }[];
   // ── Chart data ───────────────────────────────────────────────────────────────
-  timeline: { time: string; errors: number; warnings: number; avgLatency: number }[];
+  timeline: { time: string; errors: number; warns: number; avgLatency: number }[];
   levels: { level: string; count: number }[];
 };
 
@@ -197,7 +197,7 @@ export async function getWorkspaceContext(workspaceId: string, slug: string, use
     anomalySignals.push({ label: "Error volume spike", value: `${errorCount.toLocaleString()} error events indexed` });
 
   // ── Timeline — bucket sample into hourly slots ──────────────────────────────
-  const bucketMap = new Map<string, { errors: number; warnings: number; latencies: number[] }>();
+  const bucketMap = new Map<string, { errors: number; warns: number; latencies: number[] }>();
   for (const row of recentSample) {
     const d    = new Date(row.timestamp);
     const slot = [
@@ -205,10 +205,10 @@ export async function getWorkspaceContext(workspaceId: string, slug: string, use
       String(d.getUTCMonth() + 1).padStart(2, "0"),
       String(d.getUTCDate()).padStart(2, "0"),
     ].join("-") + " " + String(d.getUTCHours()).padStart(2, "0") + ":00";
-    if (!bucketMap.has(slot)) bucketMap.set(slot, { errors: 0, warnings: 0, latencies: [] });
+    if (!bucketMap.has(slot)) bucketMap.set(slot, { errors: 0, warns: 0, latencies: [] });
     const b = bucketMap.get(slot)!;
     if (row.level === "ERROR") b.errors++;
-    if (row.level === "WARN")  b.warnings++;
+    if (row.level === "WARN")  b.warns++;
     b.latencies.push(row.latencyMs);
   }
   const timeline = Array.from(bucketMap.entries())
@@ -217,7 +217,7 @@ export async function getWorkspaceContext(workspaceId: string, slug: string, use
     .map(([time, b]) => ({
       time,
       errors:     b.errors,
-      warnings:   b.warnings,
+      warns:      b.warns,
       avgLatency: b.latencies.length
         ? Math.round(b.latencies.reduce((s, v) => s + v, 0) / b.latencies.length)
         : 0,
